@@ -1,0 +1,27 @@
+# Telegram
+api_id: 7777777
+api_hash: '1111111111111111ffffffffffffffff'
+bot_token: '1111111111:AAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBB'
+
+proxy:
+# - "http"
+# - '172.20.10.1'
+# - 1082
+
+# List of Allowed chats:
+allowed_chat_ids:
+- 00000000
+- -1000000000000
+
+# Set log level:
+# CRITICAL = 50 ERROR = 40 WARNING = 30 INFO = 20 DEBUG = 10 NOTSET = 0
+log_level: 20
+
+# webui , forge
+extensions:
+  image_generator: 'webui'
+  image_generator_output_dir: 'output'
+  webui:
+    base_url: 'http://127.0.0.1:7860'
+  forge:
+    base_url: 'http://127.0.0.1:7860'
