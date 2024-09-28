@@ -1,2 +1,4 @@
-telethon==5.3.1
-
+Telethon
+ruamel.yaml
+httpx
+attrs
