@@ -39,17 +39,27 @@ def get_image_generator(event):
 
 def message_to_prompt(message: str):
     msg_split = message.split("\n")
-    prompt = msg_split[1].strip("`")
+    print(msg_split)
     negative_prompt: str = None
     if len(msg_split) > 1:
+        prompt = msg_split[1].strip("`")
         if msg_split[1].lower().startswith("negative prompt:"):
             negative_prompt = msg_split[1][16:]
         elif msg_split[1].lower().startswith("negative:"):
             negative_prompt = msg_split[1][9:]
-    if negative_prompt:
-        return (prompt, negative_prompt)
+        if negative_prompt:
+            return (prompt, negative_prompt)
+        else:
+            return (prompt, "")
     else:
-        return (prompt, "")
+        return (message, "")
+
+
+def message_head(message):
+    pattern = re.compile("/?([\w\s]+):")
+    current_menu = re.search(pattern, message)
+    if current_menu:
+        return current_menu[1]
 
 
 def save_live_image(image: str):
@@ -61,9 +71,9 @@ def save_live_image(image: str):
 
 async def update_progress(generator_client, event, id_task):
     if event.pattern_match:
-        status_text = f"txt2img:\n`{event.pattern_match[1]}` \n"
+        status_text = f"generating...\n`{event.pattern_match[1]}` \n"
     else:
-        status_text = "**txt2img:** \n"
+        status_text = "**generating...** \n"
     picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.svg")
     status = await event.respond(
         message=status_text, file=picframe, reply_to=event._message_id
@@ -90,7 +100,6 @@ async def generate_txt2img(
     generator_client = get_image_generator(event)
     payload = generator_client.txt2img_payload
     payload.force_task_id = uuid.uuid4().hex
-    print(payload.force_task_id)
     if message:
         payload.prompt, payload.negative_prompt = message_to_prompt(message)
     elif event.pattern_match:
@@ -122,6 +131,103 @@ async def generate_txt2img(
             if info["all_prompts"][index]:
                 infotext = (
                     f"**txt2img:** \n`{info['all_prompts'][index]}` \n" + infotext
+                )
+        if "ADetailer model" in info["extra_generation_params"].keys():
+            infotext += f"ADetailer model: {info['extra_generation_params']['ADetailer model']}, "
+        if len(infotext) > 4096:
+            infotext = infotext[:4096]
+
+        img_file = await event.client.upload_file(
+            base64.b64decode(image),
+            file_name=f"txt2img-{utils.timestamp()}-{index}.png",
+        )
+        await progress.result().edit(
+            file=img_file,
+            # reply_to = event._message_id,
+            # caption = self.payload['prompt'] if self.payload["prompt"] else infotexts[index],
+            text=f"{infotext}",
+            force_document=False,
+            buttons=[Button.inline("Regen"), Button.inline("File")],
+        )
+
+
+async def check_reply(
+    event: Union[events.NewMessage.Event, events.MessageEdited.Event]
+):
+    reply_message = await event.message.get_reply_message()
+    if reply_message.photo:
+        await generate_img2img(event, reply_message)
+
+
+async def generate_img2img(
+    event: Union[events.NewMessage.Event, events.MessageEdited.Event],
+    message=None,
+    in_memory=False,
+):
+
+    generator_client = get_image_generator(event)
+    payload = generator_client.img2img_payload
+    payload.force_task_id = uuid.uuid4().hex
+
+    if isinstance(event, events.CallbackQuery.Event):
+        msg = await event.get_message()
+        msg_txt = msg.text
+        img = await msg.download_media()
+    else:
+        msg_txt = event.message.text
+        if message:
+            img = await message.download_media()
+        else:
+            img = await event.message.download_media()
+
+    payload.prompt, payload.negative_prompt = message_to_prompt(msg_txt)
+
+    with open(img, "rb") as file:
+        b64img = base64.b64encode(file.read()).decode("utf-8")
+    init_images = [
+        b64img,
+    ]
+
+    # if in_memory:
+    #     bytes_arr = bytearray()
+    #     async for chunk in event.client.iter_download(event.photo):
+    #         bytes_arr.extend(chunk)
+    #     init_images = [
+    #         base64.b64encode(bytes_arr).decode("utf-8"),
+    #     ]
+    # else:
+    #     img = await event.message.download_media()
+
+    #     with open(img, "rb") as file:
+    #         b64img = base64.b64encode(file.read()).decode("utf-8")
+    #     init_images = [
+    #         b64img,
+    #     ]
+    payload.init_images = init_images
+
+    generate = asyncio.create_task(generator_client.img2img(payload))
+    progress = asyncio.create_task(
+        update_progress(generator_client, event, payload.force_task_id)
+    )
+    await generate
+    await progress
+    info = json.loads(generate.result().info)
+    # print(infotext)
+    progress_text = progress.result().message
+    # print(progress_text)
+    for index, image in enumerate(generate.result().images):
+        infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
+        infotext += f"Denoising strength: {info['denoising_strength']}, "
+        if len(info["all_negative_prompts"]) >= index + 1:
+            if info["all_negative_prompts"][index]:
+                infotext = (
+                    f"Negative prompt: {info['all_negative_prompts'][index]}\n"
+                    + infotext
+                )
+        if len(info["all_prompts"]) >= index + 1:
+            if info["all_prompts"][index]:
+                infotext = (
+                    f"**img2img:** \n`{info['all_prompts'][index]}` \n" + infotext
                 )
         if "ADetailer model" in info["extra_generation_params"].keys():
             infotext += f"ADetailer model: {info['extra_generation_params']['ADetailer model']}, "
@@ -235,8 +341,19 @@ async def menu_txt2img(event, generator_client):
     cfg_scale = txt2img_obj.cfg_scale
     steps = txt2img_obj.steps
     sampler_name = txt2img_obj.sampler_name
-    text += f"{width=}\n{height=}\n{cfg_scale=}\n{steps=}"
-    buttons = [[Button.inline(f"{sampler_name=}")]]
+    text += f"{width=}\n{height=}\n{cfg_scale=}\n{steps=}\n"
+    text += f"Enter settings in following format:\n"
+    text += f"`/txt2img width ` [INT]:\n"
+    text += f"`/txt2img height ` [INT]:\n"
+    text += f"`/txt2img cfg_scale ` [FLOAT]:\n"
+    text += f"`/txt2img steps ` [INT]:\n"
+    buttons = [
+        [Button.inline(f"{sampler_name=}")],
+        [Button.inline(f"{steps=}")],
+        [Button.inline(f"{cfg_scale=}")],
+        [Button.inline(f"{width=}")],
+        [Button.inline(f"{height=}")],
+    ]
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -258,9 +375,75 @@ async def menu_txt2img_sampler_name(event, generator_client, data_str: str = Non
     await event.edit(text=text, buttons=buttons)
 
 
+async def txt2img_settings(event):
+    generator_client = get_image_generator(event)
+    message: str = event.message.text
+    option = message.split()
+    if option[1] == "steps":
+        steps = int(option[2])
+        if steps > 2 and steps < 200:
+            generator_client.txt2img_payload.steps = steps
+    elif option[1] == "height":
+        height = int(option[2])
+        generator_client.txt2img_payload.height = height
+    elif option[1] == "width":
+        width = int(option[2])
+        generator_client.txt2img_payload.width = width
+    elif option[1] == "cfg_scale":
+        cfg_scale = float(option[2])
+        if cfg_scale > 0.1 and cfg_scale < 10:
+            generator_client.txt2img_payload.cfg_scale = cfg_scale
+
+
+async def img2img_settings(event):
+    generator_client = get_image_generator(event)
+    message: str = event.message.text
+    option = message.split()
+    if option[1] == "steps":
+        steps = int(option[2])
+        if steps > 2 and steps < 200:
+            generator_client.img2img_payload.steps = steps
+    elif option[1] == "height":
+        height = int(option[2])
+        generator_client.img2img_payload.height = height
+    elif option[1] == "width":
+        width = int(option[2])
+        generator_client.img2img_payload.width = width
+    elif option[1] == "cfg_scale":
+        cfg_scale = float(option[2])
+        if cfg_scale > 0.1 and cfg_scale < 10:
+            generator_client.img2img_payload.cfg_scale = cfg_scale
+    elif option[1] == "denoising_strength":
+        denoising_strength = float(option[2])
+        if denoising_strength > 0.1 and denoising_strength <= 1:
+            generator_client.img2img_payload.denoising_strength = denoising_strength
+
+
 async def menu_img2img(event, generator_client):
     text = f"Menu/img2img:\n"
-    buttons = []
+    img2img = generator_client.img2img_payload
+    width = img2img.width
+    height = img2img.height
+    cfg_scale = img2img.cfg_scale
+    steps = img2img.steps
+    sampler_name = img2img.sampler_name
+    denoising_strength = img2img.denoising_strength
+
+    text += f"{width=}\n{height=}\n{cfg_scale=}\n{steps=}\n{denoising_strength=}\n"
+    text += f"Enter settings in following format:\n"
+    text += f"`/img2img width ` [INT]:\n"
+    text += f"`/img2img height ` [INT]:\n"
+    text += f"`/img2img cfg_scale ` [FLOAT]:\n"
+    text += f"`/img2img steps ` [INT]:\n"
+    text += f"`/img2img denoising_strength ` [0-100]\n"
+    buttons = [
+        [Button.inline(f"{sampler_name=}")],
+        [Button.inline(f"{steps=}")],
+        [Button.inline(f"{cfg_scale=}")],
+        [Button.inline(f"{width=}")],
+        [Button.inline(f"{height=}")],
+        [Button.inline(f"{denoising_strength=}")],
+    ]
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -298,7 +481,14 @@ async def menu_memory_info(event, generator_client):
 async def regen(event, generator_client):
     await event.answer("ok")
     message = await event.get_message()
-    await generate_txt2img(event, message=message.text)
+    print(message.text)
+    message_title = message_head(message.text)
+    if message_title:
+        print(message_title)
+        if message_title == "img2img":
+            await generate_img2img(event, message=message)
+        elif message_title == "txt2img":
+            await generate_txt2img(event, message=message.text)
 
 
 async def menu_text_modes(event, generator_client):
@@ -414,6 +604,34 @@ async def main():
         callback=generate_txt2img,
         event=events.NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/img\s(.*)$"
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=txt2img_settings,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, pattern="/txt2img\s(.*)$"
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=img2img_settings,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, pattern="/img2img\s(.*)$"
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=generate_img2img,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, func=lambda e: e.photo
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=check_reply,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, func=lambda e: e.message.is_reply
         ),
     )
 

@@ -210,6 +210,19 @@ class WebuiClient:
                 sampler_name="DPM++ SDE Karras",
             )
 
+            self.img2img_payload = WebuiImg2Img(
+                prompt="",
+                negative_prompt="",
+                width=832,
+                height=1216,
+                cfg_scale=2,
+                steps=5,
+                sampler_name="DPM++ SDE Karras",
+                denoising_strength=0.66,
+                resize_mode=1,
+                image_cfg_scale=1.5,
+            )
+
         if os.path.exists(out_dir):
             self.out_dir = out_dir
         else:
@@ -221,31 +234,6 @@ class WebuiClient:
         self.base_url = base_url
         self.httpx_args = {"auth": auth}
         # self.client = WebuiBaseClient(base_url=base_url, httpx_args={'auth': auth})
-
-    @staticmethod
-    def txt2img_payload():
-        return StableDiffusionProcessingTxt2Img(
-            prompt="",
-            negative_prompt="",
-            width=1216,
-            height=1832,
-            cfg_scale=2,
-            steps=5,
-            sampler_name="DPM++ SDE Karras",
-        )
-
-    @staticmethod
-    def img2img_payload(image):
-        return StableDiffusionProcessingImg2Img(
-            prompt="",
-            negative_prompt="",
-            width=1216,
-            height=1832,
-            cfg_scale=2,
-            steps=5,
-            sampler_name="DPM++ SDE Karras",
-            init_images=[image],
-        )
 
     @staticmethod
     def encode_file_to_base64(path):
@@ -510,6 +498,10 @@ class WebuiClient:
 
     async def txt2img(self, payload):
         txt2img_result = await self.txt2img_post(body=payload)
+        return txt2img_result
+
+    async def img2img(self, payload):
+        txt2img_result = await self.img2img_post(body=payload)
         return txt2img_result
 
     async def progress_current(self, progress_request):
