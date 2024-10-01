@@ -9,6 +9,7 @@ from http import HTTPStatus
 from httpx import ConnectError, BasicAuth
 from typing import Union
 from .generators.webui import WebuiClient
+from .generators.forge import ForgeClient
 from .helpers import utils
 from .helpers.telegram import button_inline_list, Button
 
@@ -28,13 +29,60 @@ output_dir = os.path.join(dir_path, config["extensions"]["image_generator_output
 def get_image_generator(event):
 
     if config["extensions"]["image_generator"] == "webui":
-        auth = BasicAuth(username="user1", password="pass1")
+        if (
+            "username" in config["extensions"]["forge"]
+            and "password" in config["extensions"]["forge"]
+        ):
+            auth = BasicAuth(
+                username=config["extensions"]["forge"]["username"],
+                password=config["extensions"]["forge"]["password"],
+            )
+        else:
+            auth = None
         return WebuiClient(
             base_url=config["extensions"]["webui"]["base_url"],
             chat_id=event.chat_id,
             out_dir=output_dir,
             auth=auth,
         )
+    elif config["extensions"]["image_generator"] == "forge":
+        if (
+            "username" in config["extensions"]["forge"]
+            and "password" in config["extensions"]["forge"]
+        ):
+            auth = BasicAuth(
+                username=config["extensions"]["forge"]["username"],
+                password=config["extensions"]["forge"]["password"],
+            )
+        else:
+            auth = None
+        return ForgeClient(
+            base_url=config["extensions"]["forge"]["base_url"],
+            chat_id=event.chat_id,
+            out_dir=output_dir,
+            auth=auth,
+        )
+
+
+def check_obj_attr_type(obj, name, val):
+    if not hasattr(obj, name):
+        raise AttributeError(
+            "%s attribute not found on %s"
+            % (
+                name,
+                type(obj).__name__,
+            )
+        )
+    attr_type = type(obj.__getattribute__(name))
+    return attr_type(val)
+    # if not isinstance(val, attr_type):
+    #     raise TypeError(
+    #         "%s attribute must be set to an instance of %s"
+    #         % (
+    #             name,
+    #             attr_type,
+    #         )
+    #     )
 
 
 def message_to_prompt(message: str):
@@ -42,11 +90,15 @@ def message_to_prompt(message: str):
     print(msg_split)
     negative_prompt: str = None
     if len(msg_split) > 1:
-        prompt = msg_split[1].strip("`")
-        if msg_split[1].lower().startswith("negative prompt:"):
-            negative_prompt = msg_split[1][16:]
-        elif msg_split[1].lower().startswith("negative:"):
-            negative_prompt = msg_split[1][9:]
+        prompt = msg_split[1].strip()
+        prompt = prompt.strip("`")
+        prompt = prompt.lstrip("/img ")
+        if len(msg_split) > 2:
+            msg_split[2] = msg_split[2].strip()
+            if msg_split[2].lower().startswith("negative prompt:"):
+                negative_prompt = msg_split[2][16:]
+            elif msg_split[2].lower().startswith("negative:"):
+                negative_prompt = msg_split[2][9:]
         if negative_prompt:
             return (prompt, negative_prompt)
         else:
@@ -62,25 +114,30 @@ def message_head(message):
         return current_menu[1]
 
 
-def save_live_image(image: str):
-    file_path = "/tmp/generation-bot-thumb.png"
+def save_live_image(image):
+    file_path = f"/tmp/{image[0]}.png"
     with open(file_path, "wb") as output:
-        output.write(base64.b64decode(image))
+        output.write(base64.b64decode(image[1]))
     return file_path
 
 
 async def update_progress(generator_client, event, id_task):
-    if event.pattern_match:
-        status_text = f"generating...\n`{event.pattern_match[1]}` \n"
-    else:
-        status_text = "**generating...** \n"
-    picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.svg")
-    status = await event.respond(
-        message=status_text, file=picframe, reply_to=event._message_id
-    )
-
-    # async for s in generator_client.task_progress(id_task):
-    async for s in generator_client.progress(id_task):
+    status = None
+    async for s in generator_client.task_progress(id_task):
+        if event.pattern_match:
+            status_text = f"{s[2]}\n`{event.pattern_match[1]}` \n"
+        else:
+            status_text = f"**{s[2]}** \n"
+        if not status:
+            if s[1]:
+                picframe = save_live_image(s[1])
+            else:
+                picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.png")
+            status = await event.respond(
+                message=status_text, file=picframe, reply_to=event._message_id
+            )
+            continue
+        # async for s in generator_client.progress(id_task):
 
         text = f"{status_text}\n"
         text += f"\n📥 : [{utils.create_progress_bar(s[0]*100)}]"
@@ -92,6 +149,32 @@ async def update_progress(generator_client, event, id_task):
         except errors.MessageNotModifiedError as e:
             print(e)
     return status
+
+
+def create_infotext(info, images, gentype: str):
+
+    for index, image in enumerate(images):
+
+        infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
+        if gentype == "img2img":
+            infotext += f"Denoising strength: {info['denoising_strength']}, "
+        if len(info["all_negative_prompts"]) >= index + 1:
+            if info["all_negative_prompts"][index]:
+                infotext = (
+                    f"Negative prompt: {info['all_negative_prompts'][index]}\n"
+                    + infotext
+                )
+        if len(info["all_prompts"]) >= index + 1:
+            if info["all_prompts"][index]:
+                infotext = (
+                    f"**{gentype}:** \n`/img {info['all_prompts'][index]}` \n"
+                    + infotext
+                )
+        if "ADetailer model" in info["extra_generation_params"].keys():
+            infotext += f"ADetailer model: {info['extra_generation_params']['ADetailer model']}, "
+        if len(infotext) > 4096:
+            infotext = infotext[:4096]
+        yield infotext, image
 
 
 async def generate_txt2img(
@@ -106,7 +189,8 @@ async def generate_txt2img(
         print(event.pattern_match[1])
         payload.prompt = event.pattern_match[1]
     else:
-        payload.prompt = event.message.text
+        payload.prompt, payload.negative_prompt = message_to_prompt(event.message.text)
+
     generate = asyncio.create_task(generator_client.txt2img(payload))
     progress = asyncio.create_task(
         update_progress(generator_client, event, payload.force_task_id)
@@ -118,28 +202,10 @@ async def generate_txt2img(
     # print(infotext)
     progress_text = progress.result().message
     # print(progress_text)
-    for index, image in enumerate(generate.result().images):
-
-        infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
-        if len(info["all_negative_prompts"]) >= index + 1:
-            if info["all_negative_prompts"][index]:
-                infotext = (
-                    f"Negative prompt: {info['all_negative_prompts'][index]}\n"
-                    + infotext
-                )
-        if len(info["all_prompts"]) >= index + 1:
-            if info["all_prompts"][index]:
-                infotext = (
-                    f"**txt2img:** \n`{info['all_prompts'][index]}` \n" + infotext
-                )
-        if "ADetailer model" in info["extra_generation_params"].keys():
-            infotext += f"ADetailer model: {info['extra_generation_params']['ADetailer model']}, "
-        if len(infotext) > 4096:
-            infotext = infotext[:4096]
-
+    for infotext, image in create_infotext(info, generate.result().images, "txt2img"):
         img_file = await event.client.upload_file(
             base64.b64decode(image),
-            file_name=f"txt2img-{utils.timestamp()}-{index}.png",
+            file_name=f"txt2img-{utils.timestamp()}.png",
         )
         await progress.result().edit(
             file=img_file,
@@ -215,33 +281,13 @@ async def generate_img2img(
     # print(infotext)
     progress_text = progress.result().message
     # print(progress_text)
-    for index, image in enumerate(generate.result().images):
-        infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
-        infotext += f"Denoising strength: {info['denoising_strength']}, "
-        if len(info["all_negative_prompts"]) >= index + 1:
-            if info["all_negative_prompts"][index]:
-                infotext = (
-                    f"Negative prompt: {info['all_negative_prompts'][index]}\n"
-                    + infotext
-                )
-        if len(info["all_prompts"]) >= index + 1:
-            if info["all_prompts"][index]:
-                infotext = (
-                    f"**img2img:** \n`{info['all_prompts'][index]}` \n" + infotext
-                )
-        if "ADetailer model" in info["extra_generation_params"].keys():
-            infotext += f"ADetailer model: {info['extra_generation_params']['ADetailer model']}, "
-        if len(infotext) > 4096:
-            infotext = infotext[:4096]
-
+    for infotext, image in create_infotext(info, generate.result().images, "img2img"):
         img_file = await event.client.upload_file(
             base64.b64decode(image),
-            file_name=f"txt2img-{utils.timestamp()}-{index}.png",
+            file_name=f"img2img-{utils.timestamp()}.png",
         )
         await progress.result().edit(
             file=img_file,
-            # reply_to = event._message_id,
-            # caption = self.payload['prompt'] if self.payload["prompt"] else infotexts[index],
             text=f"{infotext}",
             force_document=False,
             buttons=[Button.inline("Regen"), Button.inline("File")],
@@ -279,8 +325,10 @@ async def start_command(event: events.NewMessage.Event):
 
 
 async def menu(event, generator_client=None):
+    buttons = []
     text = f"Menu:\n"
     if generator_client:
+        options = generator_client.options_get()
         text += f"**Stable Diffusion checkpoint:** {await generator_client.model(current=True)}"
     buttons = [
         [Button.inline("Stable Diffusion checkpoint:")],
@@ -292,10 +340,136 @@ async def menu(event, generator_client=None):
         [Button.inline("Memory Info")],
         [Button.inline("Text Modes")],
     ]
+    if isinstance(generator_client, ForgeClient):
+        if generator_client:
+            buttons.insert(0, [Button.inline(f"forge: {options.forge_preset}")])
+        else:
+            buttons.insert(0, [Button.inline("forge: ")])
     if isinstance(event, events.NewMessage.Event):
         await event.respond(message=text, buttons=buttons)
     elif isinstance(event, events.CallbackQuery.Event):
         await event.edit(text=text, buttons=buttons)
+
+
+async def menu_forge(event, generator_client, data_str: str = None):
+    if data_str:
+        if data_str in ["sd", "xl", "flux", "all"]:
+            result = await generator_client.options_post({"forge_preset": data_str})
+            await event.answer(str(result.status_code), cache_time=2)
+            await menu_forge(event, generator_client)
+    else:
+        options = generator_client.options_get()
+        forge_async_loading = options.forge_async_loading
+        forge_pin_shared_memory = options.forge_pin_shared_memory
+        forge_inference_memory = options.forge_inference_memory
+        forge_unet_storage_dtype = options.forge_unet_storage_dtype
+        forge_additional_modules = await generator_client.sd_modules(current=True)
+        clip_stop_at_last_layers = options.clip_stop_at_last_layers
+        text = f"Menu/forge:\n"
+        text += f"VAE / Text Encoder:\n"
+        for i in forge_additional_modules:
+            text += f"  - {i}\n"
+        buttons = [
+            [
+                Button.inline("sd"),
+                Button.inline("xl"),
+                Button.inline("flux"),
+                Button.inline("all"),
+            ]
+        ]
+        if options.forge_preset == "flux":
+            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
+            buttons.append([Button.inline(f"{forge_async_loading=}")])
+            buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
+            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
+            buttons.append([Button.inline(f"forge_additional_modules=")])
+        elif options.forge_preset == "xl":
+            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
+            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
+            buttons.append([Button.inline(f"forge_additional_modules=")])
+        elif options.forge_preset == "sd":
+            text += f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}"
+            buttons.append([Button.inline(f"forge_additional_modules=")])
+        elif options.forge_preset == "all":
+            text += f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}"
+            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
+            buttons.append([Button.inline(f"{forge_async_loading=}")])
+            buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
+            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
+            buttons.append([Button.inline(f"forge_additional_modules=")])
+
+        buttons.append([Button.inline("Back")])
+        await event.edit(text=text, buttons=buttons)
+
+
+async def menu_forge_async_loading(event, generator_client, data_str: str = None):
+    if data_str:
+        body = {"forge_async_loading": data_str}
+        result = await generator_client.options_post(body)
+        await event.answer(str(result.status_code), cache_time=2)
+        return await menu_forge(event, generator_client)
+    text = f"**Menu/forge/forge_async_loading:**\n"
+    buttons = [[Button.inline("Queue"), Button.inline("Async")]]
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_forge_pin_shared_memory(event, generator_client, data_str: str = None):
+    if data_str:
+        body = {"forge_pin_shared_memory": data_str}
+        result = await generator_client.options_post(body)
+        await event.answer(str(result.status_code), cache_time=2)
+        return await menu_forge(event, generator_client)
+    text = f"**Menu/forge/forge_pin_shared_memory:**\n"
+    buttons = [[Button.inline("CPU"), Button.inline("Shared")]]
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_forge_unet_storage_dtype(event, generator_client, data_str: str = None):
+    if data_str:
+        body = {"forge_unet_storage_dtype": data_str}
+        result = await generator_client.options_post(body)
+        await event.answer(str(result.status_code), cache_time=2)
+        return await menu_forge(event, generator_client)
+    text = f"**Menu/forge/forge_unet_storage_dtype:**\n"
+    buttons = [[Button.inline("Automatic"), Button.inline("Automatic (fp16 LoRA)")]]
+    buttons.append([Button.inline("bnb-nf4"), Button.inline("bnb-nf4 (fp16 LoRA)")])
+    buttons.append(
+        [Button.inline("float8-e4m3fn"), Button.inline("float8-e4m3fn (fp16 LoRA)")]
+    )
+    buttons.append([Button.inline("bnb-fp4"), Button.inline("bnb-fp4 (fp16 LoRA)")])
+    buttons.append(
+        [Button.inline("float8-e5m2"), Button.inline("float8-e5m2 (fp16 LoRA)")]
+    )
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_forge_additional_modules(event, generator_client, data_str: str = None):
+    if data_str:
+        result = await generator_client.sd_modules(data_str)
+        await event.answer(str(result), cache_time=2)
+        return await menu_forge_additional_modules(event, generator_client)
+    text = f"**Menu/forge/forge_additional_modules:**\n"
+    forge_additional_modules = await generator_client.sd_modules(current=True)
+    text += f"VAE / Text Encoder:\n"
+    for i in forge_additional_modules:
+        text += f"  - {i}\n"
+    buttons = button_inline_list(await generator_client.sd_modules())
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def options(event: events.NewMessage.Event):
+    generator_client = get_image_generator(event)
+    message: str = event.message.text
+    option = message.split()
+    try:
+        result = await generator_client.set_options(option[1], option[2])
+        await event.respond(message=str(result))
+    except (AttributeError, TypeError, ValueError, IndexError) as e:
+        await event.respond(message=str(e))
 
 
 async def menu_stable_diffusion_checkpoint(
@@ -334,27 +508,13 @@ async def menu_stable_diffusion_checkpoint(
 
 async def menu_txt2img(event, generator_client):
     text = f"Menu/txt2img:\n"
-    txt2img_obj = generator_client.txt2img_payload
-    # txt2img_keys = [{a: getattr(txt2img_obj, a)} for a in dir(txt2img_obj) if not a.startswith('__')]
-    width = txt2img_obj.width
-    height = txt2img_obj.height
-    cfg_scale = txt2img_obj.cfg_scale
-    steps = txt2img_obj.steps
-    sampler_name = txt2img_obj.sampler_name
-    text += f"{width=}\n{height=}\n{cfg_scale=}\n{steps=}\n"
     text += f"Enter settings in following format:\n"
-    text += f"`/txt2img width ` [INT]:\n"
-    text += f"`/txt2img height ` [INT]:\n"
-    text += f"`/txt2img cfg_scale ` [FLOAT]:\n"
-    text += f"`/txt2img steps ` [INT]:\n"
-    buttons = [
-        [Button.inline(f"{sampler_name=}")],
-        [Button.inline(f"{steps=}")],
-        [Button.inline(f"{cfg_scale=}")],
-        [Button.inline(f"{width=}")],
-        [Button.inline(f"{height=}")],
-    ]
-    buttons.append([Button.inline("Back")])
+    for k in generator_client.txt2img_settings():
+        text += f"`/txt2img {k} `: {getattr(generator_client.txt2img_payload, k)} \n"
+    # txt2img_obj = generator_client.txt2img_payload
+    # txt2img_keys = [{a: getattr(txt2img_obj, a)} for a in dir(txt2img_obj) if not a.startswith('__')]
+    txt2img_sampler_name = generator_client.txt2img_payload.sampler_name
+    buttons = [[Button.inline(f"{txt2img_sampler_name=}")], [Button.inline("Back")]]
     await event.edit(text=text, buttons=buttons)
 
 
@@ -362,90 +522,61 @@ async def menu_txt2img_sampler_name(event, generator_client, data_str: str = Non
     if data_str:
         result = generator_client.txt2img_sampler(data_str)
         return await menu_txt2img(event, generator_client)
-
     text = f"**Menu/txt2img/sampler_name:**\n"
     current_sampler = generator_client.txt2img_payload.sampler_name
     samplers = generator_client.txt2img_sampler()
-    # for s in samplers:
-    #     text += f'{s}\n'
-    # pprint.pprint(samplers)
     buttons = button_inline_list(samplers)
-    # buttons = []
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
 
-async def txt2img_settings(event):
+async def set_txt2img_payload(event: events.NewMessage.Event):
     generator_client = get_image_generator(event)
     message: str = event.message.text
     option = message.split()
-    if option[1] == "steps":
-        steps = int(option[2])
-        if steps > 2 and steps < 200:
-            generator_client.txt2img_payload.steps = steps
-    elif option[1] == "height":
-        height = int(option[2])
-        generator_client.txt2img_payload.height = height
-    elif option[1] == "width":
-        width = int(option[2])
-        generator_client.txt2img_payload.width = width
-    elif option[1] == "cfg_scale":
-        cfg_scale = float(option[2])
-        if cfg_scale > 0.1 and cfg_scale < 10:
-            generator_client.txt2img_payload.cfg_scale = cfg_scale
-
-
-async def img2img_settings(event):
-    generator_client = get_image_generator(event)
-    message: str = event.message.text
-    option = message.split()
-    if option[1] == "steps":
-        steps = int(option[2])
-        if steps > 2 and steps < 200:
-            generator_client.img2img_payload.steps = steps
-    elif option[1] == "height":
-        height = int(option[2])
-        generator_client.img2img_payload.height = height
-    elif option[1] == "width":
-        width = int(option[2])
-        generator_client.img2img_payload.width = width
-    elif option[1] == "cfg_scale":
-        cfg_scale = float(option[2])
-        if cfg_scale > 0.1 and cfg_scale < 10:
-            generator_client.img2img_payload.cfg_scale = cfg_scale
-    elif option[1] == "denoising_strength":
-        denoising_strength = float(option[2])
-        if denoising_strength > 0.1 and denoising_strength <= 1:
-            generator_client.img2img_payload.denoising_strength = denoising_strength
+    int
+    try:
+        val = check_obj_attr_type(
+            generator_client.txt2img_payload, option[1], option[2]
+        )
+        generator_client.txt2img_payload.__setattr__(option[1], val)
+    except (AttributeError, TypeError, ValueError) as e:
+        await event.respond(message=str(e))
 
 
 async def menu_img2img(event, generator_client):
     text = f"Menu/img2img:\n"
-    img2img = generator_client.img2img_payload
-    width = img2img.width
-    height = img2img.height
-    cfg_scale = img2img.cfg_scale
-    steps = img2img.steps
-    sampler_name = img2img.sampler_name
-    denoising_strength = img2img.denoising_strength
-
-    text += f"{width=}\n{height=}\n{cfg_scale=}\n{steps=}\n{denoising_strength=}\n"
     text += f"Enter settings in following format:\n"
-    text += f"`/img2img width ` [INT]:\n"
-    text += f"`/img2img height ` [INT]:\n"
-    text += f"`/img2img cfg_scale ` [FLOAT]:\n"
-    text += f"`/img2img steps ` [INT]:\n"
-    text += f"`/img2img denoising_strength ` [0-100]\n"
-    buttons = [
-        [Button.inline(f"{sampler_name=}")],
-        [Button.inline(f"{steps=}")],
-        [Button.inline(f"{cfg_scale=}")],
-        [Button.inline(f"{width=}")],
-        [Button.inline(f"{height=}")],
-        [Button.inline(f"{denoising_strength=}")],
-    ]
+    for k in generator_client.img2img_settings():
+        text += f"`/img2img {k} `: {getattr(generator_client.img2img_payload, k)} \n"
+    # txt2img_obj = generator_client.img2img_payload
+    # txt2img_keys = [{a: getattr(img2img_obj, a)} for a in dir(img2img_obj) if not a.startswith('__')]
+    img2img_sampler_name = generator_client.img2img_payload.sampler_name
+    buttons = [[Button.inline(f"{img2img_sampler_name=}")], [Button.inline("Back")]]
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_img2img_sampler_name(event, generator_client, data_str: str = None):
+    if data_str:
+        result = generator_client.img2img_sampler(data_str)
+        return await menu_img2img(event, generator_client)
+    text = f"**Menu/img2img/sampler_name:**\n"
+    current_sampler = generator_client.img2img_payload.sampler_name
+    samplers = generator_client.img2img_sampler()
+    buttons = button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
+
+
+async def set_img2img_payload(event: events.NewMessage.Event):
+    generator_client = get_image_generator(event)
+    message: str = event.message.text
+    option = message.split()
+    try:
+        check_obj_attr_type(generator_client.img2img_payload, option[1], option[2])
+        generator_client.img2img_payload.__setattr__(option[1], option[2])
+    except (AttributeError, TypeError) as e:
+        await event.respond(message=str(e))
 
 
 async def menu_extras(event, generator_client):
@@ -513,6 +644,11 @@ async def menu_text_modes(event, generator_client):
 async def callback_query_handler(event: events.CallbackQuery.Event):
     generator_client = get_image_generator(event)
     event_str = event.data.decode("utf-8")
+    message = await event.get_message()
+    back_menu_pattern = re.compile("([\w\s]+)/[\w\s]+:")
+    back_menu = re.search(back_menu_pattern, message.text)
+    current_menu_pattern = re.compile("/?([\w\s]+):")
+    current_menu = re.search(current_menu_pattern, message.text)
     #     events.CallbackQuery(data=b'Unload')
     #     events.CallbackQuery(data=b'Refresh')
     #     events.CallbackQuery(data=b'Current')
@@ -521,6 +657,8 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             await regen(event, generator_client)
         elif event.data.startswith(b"Stable Diffusion checkpoint:"):
             await menu_stable_diffusion_checkpoint(event, generator_client)
+        elif event.data.startswith(b"forge:"):
+            await menu_forge(event, generator_client)
         elif event.data == b"txt2img":
             await menu_txt2img(event, generator_client)
         elif event.data == b"img2img":
@@ -533,32 +671,51 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             await menu_lora(event, generator_client)
         elif event.data == b"Memory Info":
             await menu_memory_info(event, generator_client)
-        elif event.data.startswith(b"sampler_name="):
+        elif event.data.startswith(b"txt2img_sampler_name="):
             await menu_txt2img_sampler_name(event, generator_client)
+        elif event.data.startswith(b"img2img_sampler_name="):
+            await menu_img2img_sampler_name(event, generator_client)
         elif event.data == b"Text Modes":
             await menu_text_modes(event, generator_client)
 
-        elif event.data == b"Back":
-            message = await event.get_message()
-            pattern = re.compile("([\w\s]+)/[\w\s]+:")
-            back_menu = re.search(pattern, message.text)
-            if back_menu:
-                if back_menu[1] == "Menu":
-                    await menu(event, generator_client)
-                elif back_menu[1] == "txt2img":
-                    await menu_txt2img(event, generator_client)
-        else:
-            message = await event.get_message()
-            pattern = re.compile("/?([\w\s]+):")
-            current_menu = re.search(pattern, message.text)
-            print(message.text)
-            if current_menu:
-                if current_menu[1] == "sampler_name":
-                    await menu_txt2img_sampler_name(event, generator_client, event_str)
-                if current_menu[1] == "Stable Diffusion checkpoint":
-                    await menu_stable_diffusion_checkpoint(
-                        event, generator_client, event_str
-                    )
+        elif event.data == b"Back" and back_menu:
+            if back_menu[1] == "Menu":
+                await menu(event, generator_client)
+            elif back_menu[1] == "forge":
+                await menu_forge(event, generator_client)
+            elif back_menu[1] == "txt2img":
+                await menu_txt2img(event, generator_client)
+            elif back_menu[1] == "img2img":
+                await menu_img2img(event, generator_client)
+        elif current_menu:
+            if current_menu[1] == "forge":
+                if event.data.startswith(b"forge_async_loading="):
+                    await menu_forge_async_loading(event, generator_client)
+                elif event.data.startswith(b"forge_pin_shared_memory="):
+                    await menu_forge_pin_shared_memory(event, generator_client)
+                elif event.data.startswith(b"forge_unet_storage_dtype="):
+                    await menu_forge_unet_storage_dtype(event, generator_client)
+                elif event.data.startswith(b"forge_additional_modules="):
+                    await menu_forge_additional_modules(event, generator_client)
+                else:
+                    await menu_forge(event, generator_client, event_str)
+            elif current_menu[1] == "forge_async_loading":
+                await menu_forge_async_loading(event, generator_client, event_str)
+            elif current_menu[1] == "forge_pin_shared_memory":
+                await menu_forge_pin_shared_memory(event, generator_client, event_str)
+            elif current_menu[1] == "forge_unet_storage_dtype":
+                await menu_forge_unet_storage_dtype(event, generator_client, event_str)
+            elif current_menu[1] == "forge_additional_modules":
+                await menu_forge_additional_modules(event, generator_client, event_str)
+            elif current_menu[1] == "sampler_name" and back_menu[1] == "txt2img":
+                await menu_txt2img_sampler_name(event, generator_client, event_str)
+            elif current_menu[1] == "sampler_name" and back_menu[1] == "img2img":
+                await menu_img2img_sampler_name(event, generator_client, event_str)
+            elif current_menu[1] == "Stable Diffusion checkpoint":
+                await menu_stable_diffusion_checkpoint(
+                    event, generator_client, event_str
+                )
+
     except ConnectError as e:
         await event.answer(str(e))
 
@@ -608,16 +765,30 @@ async def main():
     )
 
     telegram_client.add_event_handler(
-        callback=txt2img_settings,
+        callback=generate_txt2img,
+        event=events.MessageEdited(
+            chats=allowed_chat_ids, incoming=True, pattern="/img\s(.*)$"
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=set_txt2img_payload,
         event=events.NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/txt2img\s(.*)$"
         ),
     )
 
     telegram_client.add_event_handler(
-        callback=img2img_settings,
+        callback=set_img2img_payload,
         event=events.NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/img2img\s(.*)$"
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=options,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, pattern="/options\s(.*)$"
         ),
     )
 
