@@ -358,11 +358,13 @@ async def menu(event, generator_client=None):
         await event.edit(text=text, buttons=buttons)
 
 
-async def menu_forge(event, generator_client, data_str: str = None):
+async def menu_forge(
+    event, generator_client: Union[WebuiClient, ForgeClient], data_str: str = None
+):
     if data_str:
         if data_str in ["sd", "xl", "flux", "all"]:
-            result = await generator_client.options_post({"forge_preset": data_str})
-            await event.answer(str(result.status_code), cache_time=2)
+            result = await generator_client.set_forge_preset(data_str)
+            await event.answer(result, cache_time=2)
             await menu_forge(event, generator_client)
     else:
         options = generator_client.options_get()
@@ -385,20 +387,24 @@ async def menu_forge(event, generator_client, data_str: str = None):
             ]
         ]
         if options.forge_preset == "flux":
-            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
+            text += f"`/options forge_inference_memory `: {forge_inference_memory}\n"
             buttons.append([Button.inline(f"{forge_async_loading=}")])
             buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
             buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
             buttons.append([Button.inline(f"forge_additional_modules=")])
         elif options.forge_preset == "xl":
-            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
+            text += f"`/options forge_inference_memory `: {forge_inference_memory}\n"
             buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
             buttons.append([Button.inline(f"forge_additional_modules=")])
         elif options.forge_preset == "sd":
-            text += f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}"
+            text += (
+                f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}\n"
+            )
             buttons.append([Button.inline(f"forge_additional_modules=")])
         elif options.forge_preset == "all":
-            text += f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}"
+            text += (
+                f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}\n"
+            )
             text += f"`/options forge_inference_memory `: {forge_inference_memory}"
             buttons.append([Button.inline(f"{forge_async_loading=}")])
             buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
@@ -473,7 +479,8 @@ async def options(event: events.NewMessage.Event):
     message: str = event.message.text
     option = message.split()
     try:
-        result = await generator_client.set_options(option[1], option[2])
+        new_options = {option[1]: option[2]}
+        result = await generator_client.set_options(new_options)
         await event.respond(message=str(result))
     except (AttributeError, TypeError, ValueError, IndexError) as e:
         await event.respond(message=str(e))
@@ -527,11 +534,11 @@ async def menu_txt2img(event, generator_client):
 
 async def menu_txt2img_sampler_name(event, generator_client, data_str: str = None):
     if data_str:
-        result = generator_client.txt2img_sampler(data_str)
+        generator_client.txt2img_payload.sampler_name = data_str
         return await menu_txt2img(event, generator_client)
     text = f"**Menu/txt2img/sampler_name:**\n"
     current_sampler = generator_client.txt2img_payload.sampler_name
-    samplers = generator_client.txt2img_sampler()
+    samplers = generator_client.get_samplers()
     buttons = button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -565,11 +572,11 @@ async def menu_img2img(event, generator_client):
 
 async def menu_img2img_sampler_name(event, generator_client, data_str: str = None):
     if data_str:
-        result = generator_client.img2img_sampler(data_str)
+        generator_client.img2img_payload.sampler_name = data_str
         return await menu_img2img(event, generator_client)
     text = f"**Menu/img2img/sampler_name:**\n"
     current_sampler = generator_client.img2img_payload.sampler_name
-    samplers = generator_client.img2img_sampler()
+    samplers = generator_client.get_samplers()
     buttons = button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)

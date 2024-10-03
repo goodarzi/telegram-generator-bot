@@ -136,7 +136,9 @@ from .stable_diffusion_webui_forge_client.api.default import (
 from .stable_diffusion_webui_forge_client.api.default import (
     get_sd_vaes_and_text_encoders_sdapi_v1_sd_modules_get,
 )
-
+from .stable_diffusion_webui_forge_client.api.default import (
+    get_schedulers_sdapi_v1_schedulers_get,
+)
 
 from .stable_diffusion_webui_forge_client.models import (
     StableDiffusionProcessingTxt2Img,
@@ -484,12 +486,17 @@ class ForgeClient:
                 client=client, body=body
             )
 
-    async def sd_modules_get(self):
+    def sd_modules_get(self):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
         with client as client:
-            return get_sd_vaes_and_text_encoders_sdapi_v1_sd_modules_get.sync_detailed(
+            return get_sd_vaes_and_text_encoders_sdapi_v1_sd_modules_get.sync(
                 client=client
             )
+
+    def schedulers_get(self):
+        client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
+        with client as client:
+            return get_schedulers_sdapi_v1_schedulers_get.sync(client=client)
 
     #
     #
@@ -563,12 +570,13 @@ class ForgeClient:
     def memory(self):
         return self.memory_get()
 
-    def txt2img_sampler(self, sampler_name: str = None):
-        if sampler_name:
-            self.txt2img_payload.sampler_name = sampler_name
-        else:
-            response = self.samplers_get()
-            return [i.name for i in response]
+    def get_samplers(self):
+        response = self.samplers_get()
+        return [i.name for i in response]
+
+    def get_schedulers(self):
+        response = self.schedulers_get()
+        return [i.name for i in response]
 
     def lora(self):
         response: Response = self.loras_get()
@@ -604,7 +612,7 @@ class ForgeClient:
 
     def txt2img_settings(self):
         options = self.options_get()
-        if options.forge_preset == "flux":
+        if options.forge_preset == ["flux", "all"]:
             return [
                 "width",
                 "height",
@@ -620,7 +628,7 @@ class ForgeClient:
 
     def img2img_settings(self):
         options = self.options_get()
-        if options.forge_preset == "flux":
+        if options.forge_preset == ["flux", "all"]:
             return [
                 "width",
                 "height",
@@ -638,23 +646,24 @@ class ForgeClient:
                 "cfg_scale",
                 "steps",
                 "sampler_name",
+                "scheduler",
                 "denoising_strength",
             ]
 
     async def sd_modules(self, module=None, current=False):
         options: Options = self.options_get()
         current_modules: list = options.forge_additional_modules
-        response = await self.sd_modules_get()
-        if current and response.parsed:
+        response = self.sd_modules_get()
+        if current and response:
             current_modules_names = []
             for c in current_modules:
-                for m in response.parsed:
+                for m in response:
                     if c == m.filename:
                         current_modules_names.append(m.model_name)
             return current_modules_names
-        if module and response.parsed:
+        if module and response:
             module_file_name = None
-            for m in response.parsed:
+            for m in response:
                 if module == m.model_name:
                     module_file_name = m.filename
             if module_file_name:
@@ -666,24 +675,94 @@ class ForgeClient:
                     {"forge_additional_modules": current_modules}
                 )
                 return result.status_code
-        elif response.parsed:
+        elif response:
             forge_additional_modules = []
-            for i in response.parsed:
+            for i in response:
                 forge_additional_modules.append(i.model_name)
             return forge_additional_modules
 
-    async def set_options(self, name: str, value):
+    async def set_options(self, new_options: dict):
         options = self.options_get()
-        if not hasattr(options, name):
-            raise AttributeError(
-                "%s attribute not found on %s"
-                % (
-                    name,
-                    type(options).__name__,
+        options_payload = {}
+        for k, v in new_options.items():
+            k_lower = k.lower()
+            if not hasattr(options, k_lower):
+                raise AttributeError(
+                    "%s attribute not found on %s"
+                    % (
+                        k,
+                        type(options).__name__,
+                    )
                 )
-            )
-        print(type(getattr(options, name)))
-        attr_type = type(getattr(options, name))
-        data = {name: attr_type(value)}
-        result = await self.options_post(data)
+            attr_type = type(getattr(options, k_lower))
+            value_intype = attr_type(v)
+            options_payload[k] = value_intype
+        result = await self.options_post(options_payload)
         return result.status_code
+
+    async def set_forge_preset(self, preset: str):
+        if preset == "sd":
+            self.txt2img_payload = WebuiTxt2Img(
+                height=640,
+                width=512,
+                sampler_name="Euler a",
+                scheduler="Automatic",
+                steps=20,
+            )
+            self.img2img_payload = WebuiImg2Img(
+                sampler_name="Euler a",
+                scheduler="Automatic",
+                steps=20,
+            )
+        elif preset == "xl":
+            self.txt2img_payload = WebuiTxt2Img(
+                height=1152,
+                width=896,
+                cfg_scale=5,
+                sampler_name="DPM++ 2M SDE",
+                scheduler="Karras",
+                steps=20,
+            )
+            self.img2img_payload = WebuiImg2Img(
+                height=1152,
+                width=896,
+                cfg_scale=5,
+                sampler_name="DPM++ 2M SDE",
+                scheduler="Karras",
+                steps=20,
+            )
+        elif preset == "flux":
+            self.txt2img_payload = WebuiTxt2Img(
+                height=1152,
+                width=896,
+                cfg_scale=1,
+                sampler_name="Euler",
+                scheduler="Simple",
+                steps=20,
+            )
+            self.img2img_payload = WebuiImg2Img(
+                height=1152,
+                width=896,
+                cfg_scale=1,
+                sampler_name="Euler",
+                scheduler="Simple",
+                steps=20,
+            )
+        elif preset == "all":
+            self.txt2img_payload = WebuiTxt2Img(
+                sampler_name="DPM++ 2M",
+                scheduler="Automatic",
+                steps=20,
+            )
+            self.img2img_payload = WebuiImg2Img(
+                sampler_name="DPM++ 2M",
+                scheduler="Automatic",
+                steps=20,
+            )
+
+        try:
+            new_options = {"forge_preset": preset, "CLIP_stop_at_last_layers": 1}
+            await self.set_options(new_options)
+            return "Success"
+        except Exception as e:
+            return str(e)
