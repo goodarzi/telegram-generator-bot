@@ -197,7 +197,6 @@ async def generate_txt2img(
     await progress
     info = json.loads(generate.result().info)
 
-    # print(infotext)
     progress_text = progress.result().message
     # print(progress_text)
     for infotext, image in create_infotext(info, generate.result().images, "txt2img"):
