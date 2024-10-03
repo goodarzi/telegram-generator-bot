@@ -222,6 +222,8 @@ class ForgeClient:
             if "log_level" in kwargs:
                 self.logger.setLevel(kwargs["log_level"])
 
+            self.tg_msg_id_input_files = {}
+
             self.txt2img_payload: WebuiTxt2Img = WebuiTxt2Img(
                 prompt="",
                 negative_prompt="",
@@ -535,7 +537,7 @@ class ForgeClient:
                     yield (0.0, None, progress["textinfo"])
                 else:
                     yield (progress["progress"], live_preview, progress["textinfo"])
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)
 
     async def progress(self, task_id=None):
         last_progress = 0

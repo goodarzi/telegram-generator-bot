@@ -123,6 +123,7 @@ def save_live_image(image):
 
 async def update_progress(generator_client, event, id_task):
     status = None
+    buttons = [Button.inline("Intrrupt"), Button.inline("Skip")]
     async for s in generator_client.task_progress(id_task):
         if event.pattern_match:
             status_text = f"{s[2]}\n`{event.pattern_match[1]}` \n"
@@ -134,18 +135,23 @@ async def update_progress(generator_client, event, id_task):
             else:
                 picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.png")
             status = await event.respond(
-                message=status_text, file=picframe, reply_to=event._message_id
+                message=status_text,
+                file=picframe,
+                reply_to=event._message_id,
+                buttons=buttons,
             )
             continue
-        # async for s in generator_client.progress(id_task):
 
         text = f"{status_text}\n"
         text += f"\n📥 : [{utils.create_progress_bar(s[0]*100)}]"
         try:
             if s[1]:
-                await status.edit(text=text, file=save_live_image(s[1]))
+                # await status.edit(
+                #     text=text, buttons=buttons, file=save_live_image(s[1])
+                # )
+                await status.edit(text=text, buttons=buttons)
             else:
-                await status.edit(text=text)
+                await status.edit(text=text, buttons=buttons)
         except errors.MessageNotModifiedError as e:
             print(e)
     return status
@@ -207,7 +213,7 @@ async def generate_txt2img(
             base64.b64decode(image),
             file_name=f"txt2img-{utils.timestamp()}.png",
         )
-        await progress.result().edit(
+        edit_msg = await progress.result().edit(
             file=img_file,
             # reply_to = event._message_id,
             # caption = self.payload['prompt'] if self.payload["prompt"] else infotexts[index],
@@ -215,6 +221,7 @@ async def generate_txt2img(
             force_document=False,
             buttons=[Button.inline("Regen"), Button.inline("File")],
         )
+        generator_client.tg_msg_id_input_files[edit_msg.id] = img_file
 
 
 async def check_reply(
@@ -622,6 +629,19 @@ async def regen(event, generator_client):
             await generate_txt2img(event, message=message.text)
 
 
+async def send_as_file(
+    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+):
+    message = await event.get_message()
+    if message.id in generator_client.tg_msg_id_input_files:
+        await event.answer("Sending as File")
+        await event.reply(
+            file=generator_client.tg_msg_id_input_files[message.id], force_document=True
+        )
+    else:
+        await event.answer("File not Found")
+
+
 async def menu_text_modes(event, generator_client):
     text = f"Menu/Text Modes:\n"
     text += f"||spoiler||\n"
@@ -655,6 +675,8 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
     try:
         if event.data == b"Regen":
             await regen(event, generator_client)
+        elif event.data == b"File":
+            await send_as_file(event, generator_client)
         elif event.data.startswith(b"Stable Diffusion checkpoint:"):
             await menu_stable_diffusion_checkpoint(event, generator_client)
         elif event.data.startswith(b"forge:"):
