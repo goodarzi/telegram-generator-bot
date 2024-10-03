@@ -75,14 +75,6 @@ def check_obj_attr_type(obj, name, val):
         )
     attr_type = type(obj.__getattribute__(name))
     return attr_type(val)
-    # if not isinstance(val, attr_type):
-    #     raise TypeError(
-    #         "%s attribute must be set to an instance of %s"
-    #         % (
-    #             name,
-    #             attr_type,
-    #         )
-    #     )
 
 
 def message_to_prompt(message: str):
