@@ -200,7 +200,6 @@ class ForgeClient:
             self.out_dir = out_dir
         else:
             os.mkdir(out_dir)
-            # raise ValueError
 
         self.out_dir_t2i = os.path.join(self.out_dir, "txt2img")
         self.img2img_dir = os.path.join(self.out_dir, "img2img")
@@ -225,31 +224,7 @@ class ForgeClient:
                 self.logger.setLevel(kwargs["log_level"])
 
             self.tg_msg_id_input_files = {}
-
-            self.txt2img_payload: WebuiTxt2Img = WebuiTxt2Img(
-                prompt="",
-                negative_prompt="",
-                width=832,
-                height=1216,
-                cfg_scale=2,
-                steps=5,
-                sampler_name="DPM++ SDE Karras",
-                scheduler="karras",
-            )
-
-            self.img2img_payload: WebuiImg2Img = WebuiImg2Img(
-                prompt="",
-                negative_prompt="",
-                width=832,
-                height=1216,
-                cfg_scale=2,
-                steps=5,
-                sampler_name="DPM++ SDE Karras",
-                scheduler="karras",
-                denoising_strength=0.66,
-                resize_mode=1,
-                image_cfg_scale=1.5,
-            )
+            self.set_forge_preset()
 
     @staticmethod
     def encode_file_to_base64(path):
@@ -321,12 +296,10 @@ class ForgeClient:
             else:
                 return result
 
-    async def interrupt_post(self):
+    def interrupt_post(self):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
-        async with client as client:
-            return await interruptapi_sdapi_v1_interrupt_post.asyncio_detailed(
-                client=client
-            )
+        with client as client:
+            return interruptapi_sdapi_v1_interrupt_post.sync_detailed(client=client)
 
     def skip_post(self):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
@@ -338,10 +311,10 @@ class ForgeClient:
         with client as client:
             return get_config_sdapi_v1_options_get.sync(client=client)
 
-    async def options_post(self, body: dict):
+    def options_post(self, body: dict):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
-        async with client as client:
-            return await set_config_sdapi_v1_options_post.asyncio_detailed(
+        with client as client:
+            return set_config_sdapi_v1_options_post.sync(
                 client=client, body=SetConfigSdapiV1OptionsPostReq.from_dict(body)
             )
 
@@ -601,23 +574,19 @@ class ForgeClient:
             lora_list.append(i["name"])
         return lora_list
 
-    async def model(self, model: str = None, current: bool = False):
+    def model(self, model: str = None, current: bool = False):
         if model:
             option_payload = {
                 "sd_model_checkpoint": model,
             }
-            response = await self.options_post(body=option_payload)
-            return response.status_code
-
-        if current:
-            response = self.options_get()
-            return response.sd_model_checkpoint
-
-        response = self.sd_models_get()
-        model_list = []
-        for i in response:
-            model_list.append(i.model_name)
-        return model_list
+            self.options_post(body=option_payload)
+            return
+        elif current:
+            options = self.options_get()
+            return options.sd_model_checkpoint
+        else:
+            models = self.sd_models_get()
+            return [i.model_name for i in models]
 
     async def forge_options(self, option, val):
         if hasattr(Options, option):
@@ -627,7 +596,7 @@ class ForgeClient:
 
     def txt2img_settings(self):
         options = self.options_get()
-        if options.forge_preset == ["flux", "all"]:
+        if options.forge_preset in ["flux", "all"]:
             return [
                 "width",
                 "height",
@@ -643,7 +612,7 @@ class ForgeClient:
 
     def img2img_settings(self):
         options = self.options_get()
-        if options.forge_preset == ["flux", "all"]:
+        if options.forge_preset in ["flux", "all"]:
             return [
                 "width",
                 "height",
@@ -665,38 +634,28 @@ class ForgeClient:
                 "denoising_strength",
             ]
 
-    async def sd_modules(self, module=None, current=False):
+    def sd_modules(self, module=None, current=False):
         options: Options = self.options_get()
-        current_modules: list = options.forge_additional_modules
-        response = self.sd_modules_get()
-        if current and response:
-            current_modules_names = []
-            for c in current_modules:
-                for m in response:
-                    if c == m.filename:
-                        current_modules_names.append(m.model_name)
+        selected_modules: list = options.forge_additional_modules
+        avail_modules = self.sd_modules_get()
+        if current:
+            current_modules_names = [
+                m.model_name for m in avail_modules if m.filename in selected_modules
+            ]
             return current_modules_names
-        if module and response:
-            module_file_name = None
-            for m in response:
-                if module == m.model_name:
-                    module_file_name = m.filename
-            if module_file_name:
-                if module_file_name in current_modules:
-                    current_modules.remove(module_file_name)
+        elif module:
+            module_files = [m.filename for m in avail_modules if module == m.model_name]
+            if module_files:
+                if module_files[0] in selected_modules:
+                    selected_modules.remove(module_files[0])
                 else:
-                    current_modules.append(module_file_name)
-                result = await self.options_post(
-                    {"forge_additional_modules": current_modules}
-                )
-                return result.status_code
-        elif response:
-            forge_additional_modules = []
-            for i in response:
-                forge_additional_modules.append(i.model_name)
-            return forge_additional_modules
+                    selected_modules.append(module_files[0])
+                self.options_post({"forge_additional_modules": selected_modules})
+                return "ok"
+        else:
+            return [i.model_name for i in avail_modules]
 
-    async def set_options(self, new_options: dict):
+    def set_options(self, new_options: dict):
         options = self.options_get()
         options_payload = {}
         for k, v in new_options.items():
@@ -712,10 +671,17 @@ class ForgeClient:
             attr_type = type(getattr(options, k_lower))
             value_intype = attr_type(v)
             options_payload[k] = value_intype
-        result = await self.options_post(options_payload)
-        return result.status_code
+        self.options_post(options_payload)
 
-    async def set_forge_preset(self, preset: str):
+    def set_forge_preset(self, preset: str = None):
+        if not preset:
+            options = self.options_get()
+            new_options = {"CLIP_stop_at_last_layers": 1}
+            preset = options.forge_preset
+        else:
+            new_options = {"forge_preset": preset, "CLIP_stop_at_last_layers": 1}
+        self.set_options(new_options)
+
         if preset == "sd":
             self.txt2img_payload = WebuiTxt2Img(
                 height=640,
@@ -774,10 +740,3 @@ class ForgeClient:
                 scheduler="Automatic",
                 steps=20,
             )
-
-        try:
-            new_options = {"forge_preset": preset, "CLIP_stop_at_last_layers": 1}
-            await self.set_options(new_options)
-            return "Success"
-        except Exception as e:
-            return str(e)

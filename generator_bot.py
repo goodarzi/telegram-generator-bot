@@ -302,21 +302,6 @@ async def generate_img2img(
         )
 
 
-async def model(event: events.NewMessage.Event):
-    generator_client = get_image_generator(event)
-    result = await generator_client.model()
-    buttons = button_inline_list(result)
-    buttons.append(
-        [
-            Button.inline("Refresh"),
-            Button.inline("Reload"),
-            Button.inline("Unload"),
-            Button.inline("Current Model"),
-        ]
-    )
-    await event.respond(message="Select Model:", buttons=buttons)
-
-
 async def start_command(event: events.NewMessage.Event):
     buttons = [
         Button.text("Checkpoints"),
@@ -329,7 +314,7 @@ async def start_command(event: events.NewMessage.Event):
 async def menu(event, generator_client=None):
     text = f"**Menu:**\n"
     buttons = [
-        [Button.inline("Stable Diffusion checkpoint")],
+        [Button.inline("Stable Diffusion checkpoints")],
         [Button.inline("txt2img"), Button.inline("img2img")],
         [Button.inline("Extras"), Button.inline("PNG Info"), Button.inline("lora")],
         [Button.inline("Memory Info"), Button.inline("Text Modes")],
@@ -354,16 +339,19 @@ async def menu_forge(
 ):
     if data_str:
         if data_str in ["sd", "xl", "flux", "all"]:
-            result = await generator_client.set_forge_preset(data_str)
-            await event.answer(result, cache_time=2)
-            await menu_forge(event, generator_client)
+            try:
+                generator_client.set_forge_preset(data_str)
+                await event.answer(data_str, cache_time=2)
+                await menu_forge(event, generator_client)
+            except Exception as e:
+                await event.answer(str(e), cache_time=2)
     else:
         options = generator_client.options_get()
         forge_async_loading = options.forge_async_loading
         forge_pin_shared_memory = options.forge_pin_shared_memory
         forge_inference_memory = options.forge_inference_memory
         forge_unet_storage_dtype = options.forge_unet_storage_dtype
-        forge_additional_modules = await generator_client.sd_modules(current=True)
+        forge_additional_modules = generator_client.sd_modules(current=True)
         clip_stop_at_last_layers = options.clip_stop_at_last_layers
         text = f"Menu/forge:\n"
         text += f"VAE / Text Encoder:\n"
@@ -409,9 +397,12 @@ async def menu_forge(
 async def menu_forge_async_loading(event, generator_client, data_str: str = None):
     if data_str:
         body = {"forge_async_loading": data_str}
-        result = await generator_client.options_post(body)
-        await event.answer(str(result.status_code), cache_time=2)
-        return await menu_forge(event, generator_client)
+        try:
+            generator_client.options_post(body)
+            await event.answer(data_str, cache_time=2)
+            return await menu_forge(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
     text = f"**Menu/forge/forge_async_loading:**\n"
     buttons = [[Button.inline("Queue"), Button.inline("Async")]]
     buttons.append([Button.inline("Back")])
@@ -421,9 +412,12 @@ async def menu_forge_async_loading(event, generator_client, data_str: str = None
 async def menu_forge_pin_shared_memory(event, generator_client, data_str: str = None):
     if data_str:
         body = {"forge_pin_shared_memory": data_str}
-        result = await generator_client.options_post(body)
-        await event.answer(str(result.status_code), cache_time=2)
-        return await menu_forge(event, generator_client)
+        try:
+            generator_client.options_post(body)
+            await event.answer(data_str, cache_time=2)
+            return await menu_forge(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
     text = f"**Menu/forge/forge_pin_shared_memory:**\n"
     buttons = [[Button.inline("CPU"), Button.inline("Shared")]]
     buttons.append([Button.inline("Back")])
@@ -433,9 +427,12 @@ async def menu_forge_pin_shared_memory(event, generator_client, data_str: str = 
 async def menu_forge_unet_storage_dtype(event, generator_client, data_str: str = None):
     if data_str:
         body = {"forge_unet_storage_dtype": data_str}
-        result = await generator_client.options_post(body)
-        await event.answer(str(result.status_code), cache_time=2)
-        return await menu_forge(event, generator_client)
+        try:
+            generator_client.options_post(body)
+            await event.answer(data_str, cache_time=2)
+            return await menu_forge(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
     text = f"**Menu/forge/forge_unet_storage_dtype:**\n"
     buttons = [[Button.inline("Automatic"), Button.inline("Automatic (fp16 LoRA)")]]
     buttons.append([Button.inline("bnb-nf4"), Button.inline("bnb-nf4 (fp16 LoRA)")])
@@ -452,15 +449,18 @@ async def menu_forge_unet_storage_dtype(event, generator_client, data_str: str =
 
 async def menu_forge_additional_modules(event, generator_client, data_str: str = None):
     if data_str:
-        result = await generator_client.sd_modules(data_str)
-        await event.answer(str(result), cache_time=2)
-        return await menu_forge_additional_modules(event, generator_client)
+        try:
+            generator_client.sd_modules(data_str)
+            await event.answer(data_str, cache_time=2)
+            return await menu_forge_additional_modules(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
     text = f"**Menu/forge/forge_additional_modules:**\n"
-    forge_additional_modules = await generator_client.sd_modules(current=True)
+    forge_additional_modules = generator_client.sd_modules(current=True)
     text += f"VAE / Text Encoder:\n"
     for i in forge_additional_modules:
         text += f"  - {i}\n"
-    buttons = button_inline_list(await generator_client.sd_modules())
+    buttons = button_inline_list(generator_client.sd_modules())
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -471,9 +471,9 @@ async def options(event: events.NewMessage.Event):
     option = message.split()
     try:
         new_options = {option[1]: option[2]}
-        result = await generator_client.set_options(new_options)
-        await event.respond(message=str(result))
-    except (AttributeError, TypeError, ValueError, IndexError) as e:
+        generator_client.set_options(new_options)
+        await event.respond("ok")
+    except Exception as e:
         await event.respond(message=str(e))
 
 
@@ -488,12 +488,12 @@ async def menu_stable_diffusion_checkpoint(
         elif data_str == "Unload":
             pass
         else:
-            result: HTTPStatus = await generator_client.model(data_str)
+            result: HTTPStatus = generator_client.model(data_str)
             await event.answer(str(result), cache_time=2)
             await menu(event, generator_client)
     else:
-        text = f"Menu/Stable Diffusion checkpoint:\n"
-        result = await generator_client.model()
+        text = f"Menu/Stable Diffusion checkpoints:\n"
+        result = generator_client.model()
         buttons = button_inline_list(result)
         buttons.append(
             [
@@ -643,6 +643,22 @@ async def send_as_file(
         await event.answer("File not Found")
 
 
+async def intrrupt(
+    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+):
+    result = generator_client.interrupt_post()
+    print(result)
+    await event.answer(str(result.status_code))
+
+
+async def skip(
+    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+):
+    result = generator_client.skip_post()
+    print(result)
+    await event.answer(str(result.status_code))
+
+
 async def menu_text_modes(event, generator_client):
     text = f"Menu/Text Modes:\n"
     text += f"||spoiler||\n"
@@ -678,9 +694,13 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             await regen(event, generator_client)
         elif event.data == b"File":
             await send_as_file(event, generator_client)
-        elif event.data.startswith(b"Stable Diffusion checkpoint"):
+        elif event.data == b"Intrrupt":
+            await intrrupt(event, generator_client)
+        elif event.data == b"Skip":
+            await skip(event, generator_client)
+        elif event.data == b"Stable Diffusion checkpoints":
             await menu_stable_diffusion_checkpoint(event, generator_client)
-        elif event.data.startswith(b"forge"):
+        elif event.data == b"forge":
             await menu_forge(event, generator_client)
         elif event.data == b"txt2img":
             await menu_txt2img(event, generator_client)
@@ -734,12 +754,12 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
                 await menu_txt2img_sampler_name(event, generator_client, event_str)
             elif current_menu[1] == "sampler_name" and back_menu[1] == "img2img":
                 await menu_img2img_sampler_name(event, generator_client, event_str)
-            elif current_menu[1] == "Stable Diffusion checkpoint":
+            elif current_menu[1] == "Stable Diffusion checkpoints":
                 await menu_stable_diffusion_checkpoint(
                     event, generator_client, event_str
                 )
 
-    except ConnectError as e:
+    except Exception as e:
         await event.answer(str(e))
 
 
