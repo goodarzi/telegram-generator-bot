@@ -223,6 +223,16 @@ async def check_reply(
         await generate_img2img(event, reply_message)
 
 
+async def clip(event: events.NewMessage.Event):
+    generator_client = get_image_generator(event)
+    img = await event.message.download_media()
+    with open(img, "rb") as file:
+        b64img = base64.b64encode(file.read()).decode("utf-8")
+
+    result = await generator_client.interrogate_post(b64img)
+    await event.respond(str(result))
+
+
 async def generate_img2img(
     event: Union[events.NewMessage.Event, events.MessageEdited.Event],
     message=None,
@@ -292,12 +302,6 @@ async def generate_img2img(
         )
 
 
-async def memory(event: events.NewMessage.Event):
-    generator_client = get_image_generator(event)
-    result = generator_client.memory()
-    await event.respond(str(result))
-
-
 async def model(event: events.NewMessage.Event):
     generator_client = get_image_generator(event)
     result = await generator_client.model()
@@ -323,26 +327,22 @@ async def start_command(event: events.NewMessage.Event):
 
 
 async def menu(event, generator_client=None):
-    buttons = []
-    text = f"Menu:\n"
-    if generator_client:
-        options = generator_client.options_get()
-        text += f"**Stable Diffusion checkpoint:** {await generator_client.model(current=True)}"
+    text = f"**Menu:**\n"
     buttons = [
-        [Button.inline("Stable Diffusion checkpoint:")],
-        [Button.inline("txt2img")],
-        [Button.inline("img2img")],
-        [Button.inline("Extras")],
-        [Button.inline("PNG Info")],
-        [Button.inline("lora")],
-        [Button.inline("Memory Info")],
-        [Button.inline("Text Modes")],
+        [Button.inline("Stable Diffusion checkpoint")],
+        [Button.inline("txt2img"), Button.inline("img2img")],
+        [Button.inline("Extras"), Button.inline("PNG Info"), Button.inline("lora")],
+        [Button.inline("Memory Info"), Button.inline("Text Modes")],
     ]
+
+    if not generator_client:
+        generator_client = get_image_generator(event)
+    options = generator_client.options_get()
+    text += f"**├─Checkpoint:** {options.sd_model_checkpoint}\n"
+    text += f"**├─Forge preset:** {options.forge_preset}\n"
+
     if isinstance(generator_client, ForgeClient):
-        if generator_client:
-            buttons.insert(0, [Button.inline(f"forge: {options.forge_preset}")])
-        else:
-            buttons.insert(0, [Button.inline("forge: ")])
+        buttons.insert(0, [Button.inline("forge")])
     if isinstance(event, events.NewMessage.Event):
         await event.respond(message=text, buttons=buttons)
     elif isinstance(event, events.CallbackQuery.Event):
@@ -606,9 +606,12 @@ async def menu_lora(event, generator_client):
 
 
 async def menu_memory_info(event, generator_client):
-    text = f"Menu/Memory Info:\n"
-    memory_info = generator_client.memory()
-    text += f"{memory_info}"
+    text = f"**Menu/Memory Info:**\n"
+    result = generator_client.get_memory()
+    text += "**├─RAM**\n"
+    text += f"│ ├─Free:{utils.format_byte(result['ram']['free'])} \tUsed:{utils.format_byte(result['ram']['used'])} \tTotal:{utils.format_byte(result['ram']['total'])}\n"
+    text += "**├─CUDA**\n"
+    text += f"│ ├─Free:{utils.format_byte(result['cuda']['free'])} \tUsed:{utils.format_byte(result['cuda']['used'])} \tTotal:{utils.format_byte(result['cuda']['total'])}\n"
     buttons = []
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -675,9 +678,9 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             await regen(event, generator_client)
         elif event.data == b"File":
             await send_as_file(event, generator_client)
-        elif event.data.startswith(b"Stable Diffusion checkpoint:"):
+        elif event.data.startswith(b"Stable Diffusion checkpoint"):
             await menu_stable_diffusion_checkpoint(event, generator_client)
-        elif event.data.startswith(b"forge:"):
+        elif event.data.startswith(b"forge"):
             await menu_forge(event, generator_client)
         elif event.data == b"txt2img":
             await menu_txt2img(event, generator_client)
@@ -813,7 +816,8 @@ async def main():
     )
 
     telegram_client.add_event_handler(
-        callback=generate_img2img,
+        # callback=generate_img2img,
+        callback=clip,
         event=events.NewMessage(
             chats=allowed_chat_ids, incoming=True, func=lambda e: e.photo
         ),

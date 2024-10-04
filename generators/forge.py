@@ -309,12 +309,17 @@ class ForgeClient:
                 client=client, skip_current_image=skip_current_image
             )
 
-    async def interrogateapi_sdapi_v1_interrogate_post(self, body: InterrogateRequest):
+    async def interrogate_post(self, image: str, model: str = "clip"):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
         async with client as client:
-            return await interrogateapi_sdapi_v1_interrogate_post.asyncio(
+            body = InterrogateRequest(image, model)
+            result = await interrogateapi_sdapi_v1_interrogate_post.asyncio(
                 client=client, body=body
             )
+            if "caption" in result:
+                return result["caption"]
+            else:
+                return result
 
     async def interrupt_post(self):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
@@ -567,8 +572,18 @@ class ForgeClient:
                 else:
                     yield (progress_current.progress, progress_current.current_image)
 
-    def memory(self):
-        return self.memory_get()
+    def get_memory(self):
+        meminfo = self.memory_get()
+        ram = meminfo.ram.additional_properties
+        if "system" in meminfo.cuda.additional_properties:
+            cuda = meminfo.cuda.additional_properties["system"]
+        else:
+            cuda = {"free": None, "used": None, "total": None}
+        result = {
+            "ram": ram,
+            "cuda": cuda,
+        }
+        return result
 
     def get_samplers(self):
         response = self.samplers_get()
