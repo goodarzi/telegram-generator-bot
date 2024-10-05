@@ -270,12 +270,15 @@ class ForgeClient:
                 )
             )
 
-    async def png_info_post(self, body: PNGInfoRequest):
+    async def png_info_post(self, image: str):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
         async with client as client:
-            return await pnginfoapi_sdapi_v1_png_info_post.asyncio(
+            body = PNGInfoRequest(image)
+            result = await pnginfoapi_sdapi_v1_png_info_post.asyncio(
                 client=client, body=body
             )
+            print(result)
+            return result
 
     def progress_get(self, skip_current_image: bool = False):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
@@ -291,10 +294,8 @@ class ForgeClient:
             result = await interrogateapi_sdapi_v1_interrogate_post.asyncio(
                 client=client, body=body
             )
-            if "caption" in result:
+            if result:
                 return result["caption"]
-            else:
-                return result
 
     def interrupt_post(self):
         client = ForgeBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)

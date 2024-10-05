@@ -14,7 +14,7 @@ from .helpers import utils
 from .helpers.telegram import button_inline_list, Button
 
 from .telegrambot import TelegramBot
-from telethon import events, errors
+from telethon import events, errors, types
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config_file = os.path.join(dir_path, "config.yaml")
@@ -229,8 +229,22 @@ async def clip(event: events.NewMessage.Event):
     with open(img, "rb") as file:
         b64img = base64.b64encode(file.read()).decode("utf-8")
 
-    result = await generator_client.interrogate_post(b64img)
+    # result = await generator_client.interrogate_post(b64img, "deepdanbooru")
+    result = await generator_client.interrogate_post(b64img, "clip")
     await event.respond(str(result))
+
+
+async def png_info(event: events.NewMessage.Event):
+    generator_client = get_image_generator(event)
+    img = await event.message.download_media()
+    with open(img, "rb") as file:
+        b64img = base64.b64encode(file.read()).decode("utf-8")
+
+    result = await generator_client.png_info_post(b64img)
+    if result.info:
+        await event.respond(str(result.info))
+    else:
+        await event.respond("no info")
 
 
 async def generate_img2img(
@@ -763,6 +777,20 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
         await event.answer(str(e))
 
 
+def media_is_png(event):
+    if event.file:
+        print(f"{event.file.mime_type=}")
+        if isinstance(event.file.media, types.Document):
+            if event.file.mime_type == "image/png":
+                return True
+
+
+def media_is_photo(event):
+    if event.file:
+        if isinstance(event.file.media, types.Photo):
+            return True
+
+
 async def main():
 
     session = os.path.basename(__file__).split(".")[0]
@@ -840,6 +868,13 @@ async def main():
         callback=clip,
         event=events.NewMessage(
             chats=allowed_chat_ids, incoming=True, func=lambda e: e.photo
+        ),
+    )
+
+    telegram_client.add_event_handler(
+        callback=png_info,
+        event=events.NewMessage(
+            chats=allowed_chat_ids, incoming=True, func=media_is_png
         ),
     )
 
