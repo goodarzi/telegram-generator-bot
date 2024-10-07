@@ -277,7 +277,6 @@ class ForgeClient:
             result = await pnginfoapi_sdapi_v1_png_info_post.asyncio(
                 client=client, body=body
             )
-            print(result)
             return result
 
     def progress_get(self, skip_current_image: bool = False):
