@@ -6,9 +6,9 @@ setup(
     name="telegram_generator_bot",
     version="0.0.1",
     author="Hamid Goodarzi",
-    description="A telegram chatbot to generate text and image using stable-diffusion-webui(-forge) api",
-    url="https://github.com/goodarzi/telegram_generator_bot",
-    download_url="https://github.com/goodarzi/telegram_generator_bot/releases/latest",
+    description="A telegram chatbot to generate text and image using generative interfaces",
+    url="https://github.com/goodarzi/telegram-generator-bot",
+    download_url="https://github.com/goodarzi/telegram-generator-bot/releases/latest",
     py_modules=["telegram_generator_bot"],
     classifiers=[
         "Development Status :: 5 - Production/Stable",
@@ -29,9 +29,9 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
     project_urls={
-        "Tracker": "https://github.com/goodarzi/telegram_generator_bot/issues",
+        "Tracker": "https://github.com/goodarzi/telegram-generator-bot/issues",
         "Community": "https://t.me/TelegramGeneratorBot",
-        "Source": "https://github.com/goodarzi/telegram_generator_bot",
+        "Source": "https://github.com/goodarzi/telegram-generator-bot",
     },
     python_requires="~=3.11",
 )
