@@ -334,9 +334,17 @@ async def menu(event, generator_client=None):
         [Button.inline("Memory Info"), Button.inline("Text Modes")],
     ]
 
-    if not generator_client:
-        generator_client = get_image_generator(event)
-    options = generator_client.options_get()
+    try:
+        if not generator_client:
+            generator_client = get_image_generator(event)
+
+        options = generator_client.options_get()
+    except Exception as e:
+        if isinstance(event, events.NewMessage.Event):
+            await event.respond(message=str(e), buttons=buttons)
+        elif isinstance(event, events.CallbackQuery.Event):
+            await event.edit(text=str(e), buttons=buttons)
+        return
     text += f"**├─Checkpoint:** {options.sd_model_checkpoint}\n"
 
     if isinstance(generator_client, ForgeClient):
