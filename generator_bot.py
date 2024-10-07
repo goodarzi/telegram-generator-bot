@@ -518,11 +518,6 @@ async def menu_stable_diffusion_checkpoint(
             ]
         )
         await event.edit(text=text, buttons=buttons)
-        # await event.delete()
-        # await event.reply("Select Model:", buttons=buttons)
-        # chat = await event.get_chat()
-        # telethon.tl.types.User
-        # print(vars(chat))
 
 
 async def menu_txt2img(event, generator_client):

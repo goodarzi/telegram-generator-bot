@@ -597,43 +597,47 @@ class ForgeClient:
 
     def txt2img_settings(self):
         options = self.options_get()
+        payload = [
+            "sampler_name",
+            "scheduler",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "n_iter",
+            "batch_size",
+            "seed",
+        ]
         if options.forge_preset in ["flux", "all"]:
-            return [
-                "width",
-                "height",
-                "cfg_scale",
-                "distilled_cfg_scale",
-                "steps",
-                "sampler_name",
-                "scheduler",
-            ]
-
-        elif options.forge_preset in ["xl", "sd"]:
-            return ["width", "height", "cfg_scale", "steps", "sampler_name"]
+            payload.insert(5, "distilled_cfg_scale")
+        return payload
 
     def img2img_settings(self):
         options = self.options_get()
+        inpaint = [
+            "mask_blur",
+            "inpaint_full_res",
+            "inpaint_full_res_padding",
+            "inpainting_mask_invert",
+        ]
+        # resize_mode = ["Just resize", "Crop and resize", "Resize and fill", "Just resize (latent upscale)"]
+        # resize_mode.index("Just resize")
+        payload = [
+            "resize_mode",
+            "sampler_name",
+            "scheduler",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "n_iter",
+            "batch_size",
+            "denoising_strength",
+            "seed",
+        ]
         if options.forge_preset in ["flux", "all"]:
-            return [
-                "width",
-                "height",
-                "cfg_scale",
-                "distilled_cfg_scale",
-                "steps",
-                "sampler_name",
-                "scheduler",
-                "denoising_strength",
-            ]
-        elif options.forge_preset in ["xl", "sd"]:
-            return [
-                "width",
-                "height",
-                "cfg_scale",
-                "steps",
-                "sampler_name",
-                "scheduler",
-                "denoising_strength",
-            ]
+            payload.insert(5, "distilled_cfg_scale")
+        return payload
 
     def sd_modules(self, module=None, current=False):
         options: Options = self.options_get()
