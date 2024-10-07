@@ -55,6 +55,8 @@ python3 generator_bot.py
 - [ ] Text generation web UI
 - [ ] ComfyUI
 
+## Community
+Telegram: [tg_generator_bot](https://t.me/tg_generator_bot)
 ## Contributing
 Any contributions you make are appreciated.
 
