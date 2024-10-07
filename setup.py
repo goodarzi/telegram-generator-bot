@@ -30,7 +30,7 @@ setup(
     ],
     project_urls={
         "Tracker": "https://github.com/goodarzi/telegram-generator-bot/issues",
-        "Community": "https://t.me/TelegramGeneratorBot",
+        "Community": "https://t.me/tg_generator_bot",
         "Source": "https://github.com/goodarzi/telegram-generator-bot",
     },
     python_requires="~=3.11",
