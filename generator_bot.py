@@ -30,12 +30,12 @@ def get_image_generator(event):
 
     if config["extensions"]["image_generator"] == "webui":
         if (
-            "username" in config["extensions"]["forge"]
-            and "password" in config["extensions"]["forge"]
+            "username" in config["extensions"]["webui"]
+            and "password" in config["extensions"]["webui"]
         ):
             auth = BasicAuth(
-                username=config["extensions"]["forge"]["username"],
-                password=config["extensions"]["forge"]["password"],
+                username=config["extensions"]["webui"]["username"],
+                password=config["extensions"]["webui"]["password"],
             )
         else:
             auth = None
@@ -207,7 +207,6 @@ async def generate_txt2img(
         edit_msg = await progress.result().edit(
             file=img_file,
             # reply_to = event._message_id,
-            # caption = self.payload['prompt'] if self.payload["prompt"] else infotexts[index],
             text=f"{infotext}",
             force_document=False,
             buttons=[Button.inline("Regen"), Button.inline("File")],
@@ -308,12 +307,13 @@ async def generate_img2img(
             base64.b64decode(image),
             file_name=f"img2img-{utils.timestamp()}.png",
         )
-        await progress.result().edit(
+        edit_msg = await progress.result().edit(
             file=img_file,
             text=f"{infotext}",
             force_document=False,
             buttons=[Button.inline("Regen"), Button.inline("File")],
         )
+        generator_client.tg_msg_id_input_files[edit_msg.id] = img_file
 
 
 async def start_command(event: events.NewMessage.Event):
@@ -338,9 +338,9 @@ async def menu(event, generator_client=None):
         generator_client = get_image_generator(event)
     options = generator_client.options_get()
     text += f"**├─Checkpoint:** {options.sd_model_checkpoint}\n"
-    text += f"**├─Forge preset:** {options.forge_preset}\n"
 
     if isinstance(generator_client, ForgeClient):
+        text += f"**├─Forge preset:** {options.forge_preset}\n"
         buttons.insert(0, [Button.inline("forge")])
     if isinstance(event, events.NewMessage.Event):
         await event.respond(message=text, buttons=buttons)

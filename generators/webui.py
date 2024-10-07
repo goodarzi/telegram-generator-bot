@@ -140,6 +140,7 @@ from .stable_diffusion_webui_client.models import (
     StableDiffusionProcessingImg2ImgAlwaysonScripts,
     StableDiffusionProcessingImg2ImgOverrideSettings,
     SDModelItem,
+    Options,
 )
 
 from .stable_diffusion_webui_client.models import (
@@ -184,6 +185,18 @@ class WebuiClient:
             return self
 
     def __init__(self, base_url: str, out_dir: str, auth: BasicAuth = None, **kwargs):
+        if os.path.exists(out_dir):
+            self.out_dir = out_dir
+        else:
+            os.mkdir(out_dir)
+
+        self.out_dir_t2i = os.path.join(self.out_dir, "txt2img")
+        self.img2img_dir = os.path.join(self.out_dir, "img2img")
+        self.base_url = base_url
+        if auth:
+            self.httpx_args = {"auth": auth}
+        else:
+            self.httpx_args = {}
 
         if not hasattr(self, "id"):
             if hasattr(WebuiClient.instances[-1], "id"):
@@ -191,7 +204,6 @@ class WebuiClient:
             else:
                 self.id = 1
             self.chat_id: int = kwargs["chat_id"]
-            # self.image_generator: Union[WebuiClient, ForgeClient] = kwargs['image_generator']
 
             logging.basicConfig()
             self.logger = logging.getLogger(os.path.basename(__file__)).getChild(
@@ -200,40 +212,8 @@ class WebuiClient:
             if "log_level" in kwargs:
                 self.logger.setLevel(kwargs["log_level"])
 
-            self.txt2img_payload = WebuiTxt2Img(
-                prompt="",
-                negative_prompt="",
-                width=832,
-                height=1216,
-                cfg_scale=2,
-                steps=5,
-                sampler_name="DPM++ SDE Karras",
-            )
-
-            self.img2img_payload = WebuiImg2Img(
-                prompt="",
-                negative_prompt="",
-                width=832,
-                height=1216,
-                cfg_scale=2,
-                steps=5,
-                sampler_name="DPM++ SDE Karras",
-                denoising_strength=0.66,
-                resize_mode=1,
-                image_cfg_scale=1.5,
-            )
-
-        if os.path.exists(out_dir):
-            self.out_dir = out_dir
-        else:
-            os.mkdir(out_dir)
-            # raise ValueError
-
-        self.out_dir_t2i = os.path.join(self.out_dir, "txt2img")
-        self.img2img_dir = os.path.join(self.out_dir, "img2img")
-        self.base_url = base_url
-        self.httpx_args = {"auth": auth}
-        # self.client = WebuiBaseClient(base_url=base_url, httpx_args={'auth': auth})
+            self.tg_msg_id_input_files = {}
+            self.set_preset()
 
     @staticmethod
     def encode_file_to_base64(path):
@@ -279,12 +259,14 @@ class WebuiClient:
                 )
             )
 
-    async def png_info_post(self, body: PNGInfoRequest):
+    async def png_info_post(self, image: str):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
         async with client as client:
-            return await pnginfoapi_sdapi_v1_png_info_post.asyncio(
+            body = PNGInfoRequest(image)
+            result = await pnginfoapi_sdapi_v1_png_info_post.asyncio(
                 client=client, body=body
             )
+            return result
 
     def progress_get(self, skip_current_image: bool = False):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
@@ -293,19 +275,20 @@ class WebuiClient:
                 client=client, skip_current_image=skip_current_image
             )
 
-    async def interrogateapi_sdapi_v1_interrogate_post(self, body: InterrogateRequest):
+    async def interrogate_post(self, image: str, model: str = "clip"):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
         async with client as client:
-            return await interrogateapi_sdapi_v1_interrogate_post.asyncio(
+            body = InterrogateRequest(image, model)
+            result = await interrogateapi_sdapi_v1_interrogate_post.asyncio(
                 client=client, body=body
             )
+            if result:
+                return result["caption"]
 
-    async def interrupt_post(self):
+    def interrupt_post(self):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
-        async with client as client:
-            return await interruptapi_sdapi_v1_interrupt_post.asyncio_detailed(
-                client=client
-            )
+        with client as client:
+            return interruptapi_sdapi_v1_interrupt_post.sync_detailed(client=client)
 
     def skip_post(self):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
@@ -317,10 +300,10 @@ class WebuiClient:
         with client as client:
             return get_config_sdapi_v1_options_get.sync(client=client)
 
-    async def options_post(self, body: dict):
+    def options_post(self, body: dict):
         client = WebuiBaseClient(base_url=self.base_url, httpx_args=self.httpx_args)
-        async with client as client:
-            return await set_config_sdapi_v1_options_post.asyncio_detailed(
+        with client as client:
+            return set_config_sdapi_v1_options_post.sync(
                 client=client, body=SetConfigSdapiV1OptionsPostReq.from_dict(body)
             )
 
@@ -509,21 +492,37 @@ class WebuiClient:
         return json.loads(progress_response.content)
 
     async def task_progress(self, id_task=None):
-        # progress_request = WebuiProgressRequest(id_task=id_task, live_preview=False)
-        progress_request = WebuiProgressRequest(id_task=id_task)
+        progress_request = WebuiProgressRequest(id_task=id_task, live_preview=True)
+        # progress_request = WebuiProgressRequest(id_task=id_task)
         progress = await self.progress_current(progress_request)
-        if progress["active"]:
-            last_progress = 0.0
-            while True:
-                await asyncio.sleep(1)
-                progress = await self.progress_current(progress_request)
-                pprint.pprint(progress)
-                if progress["completed"]:
-                    yield (1.0, progress["live_preview"])
-                    break
-                elif progress["progress"] != last_progress:
-                    last_progress = progress["progress"]
-                    yield (progress["progress"], progress["live_preview"])
+        last_progress = 0.0
+        last_live_preview = None
+        while True:
+            # progress = await self.progress_current(progress_request)
+            response = await self.progress_post(progress_request)
+            progress: dict = json.loads(response.content)
+            if progress["live_preview"]:
+                live_preview = progress["live_preview"].split(",")
+                del progress["live_preview"]
+                if len(live_preview) > 1:
+                    live_preview = [
+                        f'{id_task}-{progress["id_live_preview"]}',
+                        live_preview[1],
+                    ]
+            else:
+                live_preview = None
+            pprint.pprint(progress)
+            if progress["completed"]:
+                yield (1.0, None, progress["textinfo"])
+                break
+            elif progress["progress"] != last_progress:
+                last_progress = progress["progress"]
+                last_live_preview = live_preview
+                if progress["queued"]:
+                    yield (0.0, None, progress["textinfo"])
+                else:
+                    yield (progress["progress"], live_preview, progress["textinfo"])
+            await asyncio.sleep(5)
 
     async def progress(self, task_id=None):
         last_progress = 0
@@ -532,10 +531,6 @@ class WebuiClient:
         while True:
             await asyncio.sleep(1)
             progress_current = self.progress_get()
-            # pprint.pp(progress_current.progress)
-            # pprint.pp(progress_current.state)
-            # pprint.pp(progress_current.textinfo)
-            # pprint.pp(progress_current.detail)
             if (not progress_current.progress) or (progress_current.progress == 1.0):
                 yield (1.0, None)
                 break
@@ -546,15 +541,22 @@ class WebuiClient:
                 else:
                     yield (progress_current.progress, progress_current.current_image)
 
-    def memory(self):
-        return self.memory_get()
-
-    def txt2img_sampler(self, sampler_name: str = None):
-        if sampler_name:
-            self.txt2img_payload.sampler_name = sampler_name
+    def get_memory(self):
+        meminfo = self.memory_get()
+        ram = meminfo.ram.additional_properties
+        if "system" in meminfo.cuda.additional_properties:
+            cuda = meminfo.cuda.additional_properties["system"]
         else:
-            response = self.samplers_get()
-            return [i.name for i in response]
+            cuda = {"free": None, "used": None, "total": None}
+        result = {
+            "ram": ram,
+            "cuda": cuda,
+        }
+        return result
+
+    def get_samplers(self):
+        response = self.samplers_get()
+        return [i.name for i in response]
 
     def lora(self):
         response: Response = self.loras_get()
@@ -564,21 +566,76 @@ class WebuiClient:
             lora_list.append(i["name"])
         return lora_list
 
-    async def model(self, model: str = None, current: bool = False):
+    def model(self, model: str = None, current: bool = False):
         if model:
             option_payload = {
                 "sd_model_checkpoint": model,
-                "CLIP_stop_at_last_layers": 2,
             }
-            response = await self.options_post(body=option_payload)
-            return response.status_code
+            self.options_post(body=option_payload)
+            return
+        elif current:
+            options = self.options_get()
+            return options.sd_model_checkpoint
+        else:
+            models = self.sd_models_get()
+            return [i.model_name for i in models]
 
-        if current:
-            response = self.options_get()
-            return response.sd_model_checkpoint
+    async def forge_options(self, option, val):
+        if hasattr(Options, option):
+            option_payload = {option: val}
+            result = await self.options_post(body=option_payload)
+            return result.status_code
 
-        response = self.sd_models_get()
-        model_list = []
-        for i in response:
-            model_list.append(i.model_name)
-        return model_list
+    def txt2img_settings(self):
+        options = self.options_get()
+        payload = [
+            "sampler_name",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "n_iter",
+            "batch_size",
+            "seed",
+        ]
+        return payload
+
+    def img2img_settings(self):
+        options = self.options_get()
+        inpaint = [
+            "mask_blur",
+            "inpaint_full_res",
+            "inpaint_full_res_padding",
+            "inpainting_mask_invert",
+        ]
+        # resize_mode = ["Just resize", "Crop and resize", "Resize and fill", "Just resize (latent upscale)"]
+        # resize_mode.index("Just resize")
+        payload = [
+            "resize_mode",
+            "sampler_name",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "n_iter",
+            "batch_size",
+            "denoising_strength",
+            "seed",
+        ]
+        return payload
+
+    def set_preset(self):
+        self.txt2img_payload = WebuiTxt2Img(
+            height=1152,
+            width=896,
+            cfg_scale=5,
+            sampler_name="DPM++ 2M SDE Karras",
+            steps=30,
+        )
+        self.img2img_payload = WebuiImg2Img(
+            height=1152,
+            width=896,
+            cfg_scale=5,
+            sampler_name="DPM++ 2M SDE Karras",
+            steps=30,
+        )
