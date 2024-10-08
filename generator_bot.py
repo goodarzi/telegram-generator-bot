@@ -525,11 +525,17 @@ async def menu_stable_diffusion_checkpoint(
 ):
     if data_str:
         if data_str == "Refresh":
-            pass
+            await generator_client.refresh_checkpoints_post()
+            await event.answer(data_str, cache_time=2)
+            await menu_stable_diffusion_checkpoint(event, generator_client)
         elif data_str == "Reload":
-            pass
+            await generator_client.reload_checkpoint_post()
+            await event.answer(data_str, cache_time=2)
+            await menu_stable_diffusion_checkpoint(event, generator_client)
         elif data_str == "Unload":
-            pass
+            await generator_client.unload_checkpoint_post()
+            await event.answer(data_str, cache_time=2)
+            await menu_stable_diffusion_checkpoint(event, generator_client)
         else:
             result: HTTPStatus = generator_client.model(data_str)
             await event.answer(str(result), cache_time=2)
@@ -801,7 +807,11 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             elif back_menu[1] == "img2img":
                 await menu_img2img(event, generator_client)
         elif current_menu:
-            if current_menu[1] == "forge":
+            if current_menu[1] == "Stable Diffusion checkpoints":
+                await menu_stable_diffusion_checkpoint(
+                    event, generator_client, event_str
+                )
+            elif current_menu[1] == "forge":
                 if event.data.startswith(b"forge_async_loading="):
                     await menu_forge_async_loading(event, generator_client)
                 elif event.data.startswith(b"forge_pin_shared_memory="):
