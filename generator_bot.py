@@ -556,8 +556,14 @@ async def menu_txt2img(event, generator_client):
         text += f"`/txt2img {k} `: {getattr(generator_client.txt2img_payload, k)} \n"
     # txt2img_obj = generator_client.txt2img_payload
     # txt2img_keys = [{a: getattr(txt2img_obj, a)} for a in dir(txt2img_obj) if not a.startswith('__')]
-    txt2img_sampler_name = generator_client.txt2img_payload.sampler_name
-    buttons = [[Button.inline(f"{txt2img_sampler_name=}")], [Button.inline("Back")]]
+    sampler_name = generator_client.txt2img_payload.sampler_name
+    scheduler = generator_client.txt2img_payload.scheduler
+    buttons = [
+        [Button.inline(f"{sampler_name=}")],
+        [Button.inline("Back")],
+    ]
+    if isinstance(generator_client, ForgeClient):
+        buttons.insert(1, [Button.inline(f"{scheduler=}")])
     await event.edit(text=text, buttons=buttons)
 
 
@@ -569,6 +575,18 @@ async def menu_txt2img_sampler_name(event, generator_client, data_str: str = Non
     current_sampler = generator_client.txt2img_payload.sampler_name
     samplers = generator_client.get_samplers()
     buttons = button_inline_list(samplers)
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_txt2img_scheduler(event, generator_client, data_str: str = None):
+    if data_str:
+        generator_client.txt2img_payload.scheduler = data_str
+        return await menu_txt2img(event, generator_client)
+    text = f"**Menu/txt2img/scheduler:**\n"
+    current_scheduler = generator_client.txt2img_payload.scheduler
+    schedulers = generator_client.get_schedulers()
+    buttons = button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -594,8 +612,14 @@ async def menu_img2img(event, generator_client):
         text += f"`/img2img {k} `: {getattr(generator_client.img2img_payload, k)} \n"
     # txt2img_obj = generator_client.img2img_payload
     # txt2img_keys = [{a: getattr(img2img_obj, a)} for a in dir(img2img_obj) if not a.startswith('__')]
-    img2img_sampler_name = generator_client.img2img_payload.sampler_name
-    buttons = [[Button.inline(f"{img2img_sampler_name=}")], [Button.inline("Back")]]
+    sampler_name = generator_client.img2img_payload.sampler_name
+    scheduler = generator_client.img2img_payload.scheduler
+    buttons = [
+        [Button.inline(f"{sampler_name=}")],
+        [Button.inline("Back")],
+    ]
+    if isinstance(generator_client, ForgeClient):
+        buttons.insert(1, [Button.inline(f"{scheduler=}")])
     await event.edit(text=text, buttons=buttons)
 
 
@@ -607,6 +631,18 @@ async def menu_img2img_sampler_name(event, generator_client, data_str: str = Non
     current_sampler = generator_client.img2img_payload.sampler_name
     samplers = generator_client.get_samplers()
     buttons = button_inline_list(samplers)
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+async def menu_img2img_scheduler(event, generator_client, data_str: str = None):
+    if data_str:
+        generator_client.img2img_payload.scheduler = data_str
+        return await menu_img2img(event, generator_client)
+    text = f"**Menu/img2img/scheduler:**\n"
+    current_scheduler = generator_client.img2img_payload.scheduler
+    schedulers = generator_client.get_schedulers()
+    buttons = button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -631,6 +667,11 @@ async def menu_extras(event, generator_client):
 
 async def menu_png_info(event, generator_client):
     text = f"Menu/PNG Info:\n"
+    text += f"Send the photo as a file,\n"
+    text += (
+        f'To do this, turn off the "Compress the image" option when sending a photo\n'
+    )
+    text += f"This bot always runs png info for photos that are sent as files.\n"
     buttons = []
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -697,23 +738,17 @@ async def skip(
     await event.answer(str(result.status_code))
 
 
-async def menu_text_modes(event, generator_client):
-    text = f"Menu/Text Modes:\n"
-    text += f"||spoiler||\n"
-    text += f"[inline URL](http://www.example.com/)\n"
-    text += f"![👍](tg://emoji?id=5368324170671202286)\n"
-    text += f"`inline fixed-width code`"
-    text += f"```\npre-formatted fixed-width code block\n```\n"
-    text += f"```python\npre-formatted fixed-width code block written in the Python programming language\n```\n"
-    text += f">Block quotation started\n"
-    text += f">Block quotation started\n"
-    text += f">The last line of the block quotation\n"
-    text += f"**>The expandable block quotation started right after the previous block quotation\n"
-    text += f""
-    # text2 =
-    buttons = []
-    buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+# async def menu_text_modes(event, generator_client):
+#     text = f"Menu/Text Modes:\n"
+#     text += f"||spoiler||\n"
+#     text += f"[inline URL](http://www.example.com/)\n"
+#     text += f"![👍](tg://emoji?id=5368324170671202286)\n"
+#     text += f"`inline fixed-width code`"
+#     text += f"```\npre-formatted fixed-width code block\n```\n"
+#     text += f"```python\npre-formatted fixed-width code block written in the Python programming language\n```\n"
+#     buttons = []
+#     buttons.append([Button.inline("Back")])
+#     await event.edit(text=text, buttons=buttons)
 
 
 async def callback_query_handler(event: events.CallbackQuery.Event):
@@ -752,12 +787,9 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
             await menu_lora(event, generator_client)
         elif event.data == b"Memory Info":
             await menu_memory_info(event, generator_client)
-        elif event.data.startswith(b"txt2img_sampler_name="):
-            await menu_txt2img_sampler_name(event, generator_client)
-        elif event.data.startswith(b"img2img_sampler_name="):
-            await menu_img2img_sampler_name(event, generator_client)
-        elif event.data == b"Text Modes":
-            await menu_text_modes(event, generator_client)
+
+        # elif event.data == b"Text Modes":
+        #     await menu_text_modes(event, generator_client)
 
         elif event.data == b"Back" and back_menu:
             if back_menu[1] == "Menu":
@@ -780,6 +812,16 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
                     await menu_forge_additional_modules(event, generator_client)
                 else:
                     await menu_forge(event, generator_client, event_str)
+            elif current_menu[1] == "txt2img":
+                if event.data.startswith(b"sampler_name="):
+                    await menu_txt2img_sampler_name(event, generator_client)
+                elif event.data.startswith(b"scheduler="):
+                    await menu_txt2img_scheduler(event, generator_client)
+            elif current_menu[1] == "img2img":
+                if event.data.startswith(b"sampler_name="):
+                    await menu_img2img_sampler_name(event, generator_client)
+                elif event.data.startswith(b"scheduler="):
+                    await menu_img2img_scheduler(event, generator_client)
             elif current_menu[1] == "forge_async_loading":
                 await menu_forge_async_loading(event, generator_client, event_str)
             elif current_menu[1] == "forge_pin_shared_memory":
@@ -792,6 +834,10 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
                 await menu_txt2img_sampler_name(event, generator_client, event_str)
             elif current_menu[1] == "sampler_name" and back_menu[1] == "img2img":
                 await menu_img2img_sampler_name(event, generator_client, event_str)
+            elif current_menu[1] == "scheduler" and back_menu[1] == "txt2img":
+                await menu_txt2img_scheduler(event, generator_client, event_str)
+            elif current_menu[1] == "scheduler" and back_menu[1] == "img2img":
+                await menu_img2img_scheduler(event, generator_client, event_str)
             elif current_menu[1] == "Stable Diffusion checkpoints":
                 await menu_stable_diffusion_checkpoint(
                     event, generator_client, event_str
