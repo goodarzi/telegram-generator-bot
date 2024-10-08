@@ -493,57 +493,46 @@ class ForgeClient:
 
     async def task_progress(self, id_task=None):
         progress_request = WebuiProgressRequest(id_task=id_task, live_preview=True)
-        # progress_request = WebuiProgressRequest(id_task=id_task)
-        progress = await self.progress_current(progress_request)
         last_progress = 0.0
         last_live_preview = None
         while True:
             # progress = await self.progress_current(progress_request)
             response = await self.progress_post(progress_request)
             progress: dict = json.loads(response.content)
+            if (not progress["active"]) and (not progress["queued"]):
+                break
             if progress["live_preview"]:
-                live_preview = progress["live_preview"].split(",")
-                del progress["live_preview"]
-                if len(live_preview) > 1:
-                    live_preview = [
-                        f'{id_task}-{progress["id_live_preview"]}',
-                        live_preview[1],
-                    ]
+                if progress["live_preview"] != last_live_preview:
+                    last_live_preview = progress["live_preview"]
+                    live_preview = progress["live_preview"].split(",")
+                    del progress["live_preview"]
+                    pprint.pprint(progress)
+                    if len(live_preview) > 1:
+                        live_preview = [
+                            f'{id_task}-{progress["id_live_preview"]}',
+                            live_preview[1],
+                        ]
+                    else:
+                        live_preview = None
+                else:
+                    live_preview = None
             else:
+                pprint.pprint(progress)
                 live_preview = None
-            pprint.pprint(progress)
+
+            progress_current = self.progress_get()
+            pprint.pprint(progress_current.progress)
+            pprint.pprint(progress_current.state)
             if progress["completed"]:
                 yield (1.0, None, progress["textinfo"])
                 break
             elif progress["progress"] != last_progress:
                 last_progress = progress["progress"]
-                last_live_preview = live_preview
                 if progress["queued"]:
                     yield (0.0, None, progress["textinfo"])
                 else:
                     yield (progress["progress"], live_preview, progress["textinfo"])
-            await asyncio.sleep(5)
-
-    async def progress(self, task_id=None):
-        last_progress = 0
-        last_image = ""
-        # if progress_request == 1
-        while True:
             await asyncio.sleep(1)
-            progress_current = self.progress_get()
-            # pprint.pp(progress_current.progress)
-            # pprint.pp(progress_current.state)
-            # pprint.pp(progress_current.textinfo)
-            # pprint.pp(progress_current.detail)
-            if (not progress_current.progress) or (progress_current.progress == 1.0):
-                yield (1.0, None)
-                break
-            if progress_current.progress != last_progress:
-                last_progress = progress_current.progress
-                if progress_current.current_image == last_image:
-                    yield (progress_current.progress, None)
-                else:
-                    yield (progress_current.progress, progress_current.current_image)
 
     def get_memory(self):
         meminfo = self.memory_get()
@@ -695,6 +684,7 @@ class ForgeClient:
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
+                resize_mode=1,
                 sampler_name="Euler a",
                 scheduler="Automatic",
                 steps=20,
@@ -709,6 +699,7 @@ class ForgeClient:
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
+                resize_mode=1,
                 height=1152,
                 width=896,
                 cfg_scale=5,
@@ -726,6 +717,7 @@ class ForgeClient:
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
+                resize_mode=1,
                 height=1152,
                 width=896,
                 cfg_scale=1,
@@ -740,6 +732,7 @@ class ForgeClient:
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
+                resize_mode=1,
                 sampler_name="DPM++ 2M",
                 scheduler="Automatic",
                 steps=20,

@@ -113,29 +113,45 @@ def save_live_image(image):
     return file_path
 
 
-async def update_progress(generator_client, event, id_task):
+def get_full_path(path):
+    if os.path.exists(path):
+        return os.path.realpath(path)
+    else:
+        if os.path.exists(os.path.dirname(path)):
+            os.mkdir(path)
+            return os.path.realpath(path)
+        else:
+            full_path = os.path.join(os.path.realpath(""), path)
+            if not os.path.exists(full_path):
+                os.mkdir(full_path)
+            return full_path
+
+
+async def update_progress(generator_client, msg, id_task):
     status = None
     buttons = [Button.inline("Intrrupt"), Button.inline("Skip")]
+    last_text = ""
     async for s in generator_client.task_progress(id_task):
-        if event.pattern_match:
-            status_text = f"{s[2]}\n`{event.pattern_match[1]}` \n"
-        else:
-            status_text = f"**{s[2]}** \n"
+        status_text = f"**{s[2]}** \n"
         if not status:
             if s[1]:
                 picframe = save_live_image(s[1])
             else:
                 picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.png")
-            status = await event.respond(
+            status = await msg.reply(
                 message=status_text,
                 file=picframe,
-                reply_to=event._message_id,
+                thumb=None,
                 buttons=buttons,
             )
             continue
 
         text = f"{status_text}\n"
         text += f"\n📥 : [{utils.create_progress_bar(s[0]*100)}]"
+        if last_text != text:
+            last_text = text
+        else:
+            continue
         try:
             if s[1]:
                 # await status.edit(
@@ -144,18 +160,17 @@ async def update_progress(generator_client, event, id_task):
                 await status.edit(text=text, buttons=buttons)
             else:
                 await status.edit(text=text, buttons=buttons)
-        except errors.MessageNotModifiedError as e:
-            print(e)
+        except Exception as e:
+            await status.reply(str(e))
+            break
     return status
 
 
 def create_infotext(info, images, gentype: str):
-
+    infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
+    if gentype == "img2img":
+        infotext += f"Denoising strength: {info['denoising_strength']}, "
     for index, image in enumerate(images):
-
-        infotext = f"Steps: {info['steps']}, Sampler: {info['sampler_name']}, CFG scale: {info['cfg_scale']}, Seed: {info['all_seeds']}, Size: {info['height']}x{info['width']}, Model: {info['sd_model_name']}, Clip skip: {info['clip_skip']}, "
-        if gentype == "img2img":
-            infotext += f"Denoising strength: {info['denoising_strength']}, "
         if len(info["all_negative_prompts"]) >= index + 1:
             if info["all_negative_prompts"][index]:
                 infotext = (
@@ -176,50 +191,66 @@ def create_infotext(info, images, gentype: str):
 
 
 async def generate_txt2img(
-    event: Union[events.NewMessage.Event, events.MessageEdited.Event], message=None
+    event: Union[
+        events.NewMessage.Event, events.MessageEdited.Event, events.CallbackQuery.Event
+    ],
+    text: str = None,
 ):
     generator_client = get_image_generator(event)
     payload = generator_client.txt2img_payload
     payload.force_task_id = uuid.uuid4().hex
-    if message:
-        payload.prompt, payload.negative_prompt = message_to_prompt(message)
+    if text:
+        payload.prompt, payload.negative_prompt = message_to_prompt(text)
     elif event.pattern_match:
-        print(event.pattern_match[1])
         payload.prompt = event.pattern_match[1]
     else:
         payload.prompt, payload.negative_prompt = message_to_prompt(event.message.text)
 
-    generate = asyncio.create_task(generator_client.txt2img(payload))
-    progress = asyncio.create_task(
-        update_progress(generator_client, event, payload.force_task_id)
-    )
-    await generate
-    await progress
+    async with asyncio.TaskGroup() as tg:
+        generate = tg.create_task(generator_client.txt2img(payload))
+        progress = tg.create_task(
+            update_progress(generator_client, event.message, payload.force_task_id)
+        )
     info = json.loads(generate.result().info)
 
     progress_text = progress.result().message
     # print(progress_text)
+    buttons = [Button.inline("Regen"), Button.inline("File")]
+    upload_files = []
+    info_texts = []
     for infotext, image in create_infotext(info, generate.result().images, "txt2img"):
-        img_file = await event.client.upload_file(
+        upload_file = await event.client.upload_file(
             base64.b64decode(image),
             file_name=f"txt2img-{utils.timestamp()}.png",
         )
+        upload_files.append(upload_file)
+        info_texts.append(infotext)
+
+    if len(upload_files) > 1:
+        # print(info_texts)
         edit_msg = await progress.result().edit(
-            file=img_file,
-            # reply_to = event._message_id,
-            text=f"{infotext}",
-            force_document=False,
-            buttons=[Button.inline("Regen"), Button.inline("File")],
+            text=f"{info_texts[0]}",
+            buttons=buttons,
         )
-        generator_client.tg_msg_id_input_files[edit_msg.id] = img_file
+        photoalbum = await event.respond(
+            file=upload_files,
+            reply_to=edit_msg.id,
+        )
+    else:
+        edit_msg = await progress.result().edit(
+            file=upload_files[0],
+            text=f"{info_texts[0]}",
+            buttons=buttons,
+        )
+    generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
 
 
 async def check_reply(
     event: Union[events.NewMessage.Event, events.MessageEdited.Event]
 ):
     reply_message = await event.message.get_reply_message()
-    if reply_message.photo:
-        await generate_img2img(event, reply_message)
+    if reply_message.file.mime_type in ["image/png", "image/jpg", "image/jpeg"]:
+        await generate_img2img(event, reply_message, text=event.message.text)
 
 
 async def clip(event: events.NewMessage.Event):
@@ -246,28 +277,19 @@ async def png_info(event: events.NewMessage.Event):
         await event.respond("no info")
 
 
-async def generate_img2img(
-    event: Union[events.NewMessage.Event, events.MessageEdited.Event],
-    message=None,
-    in_memory=False,
-):
+async def generate_img2img(event, message, text: str = None):
 
     generator_client = get_image_generator(event)
     payload = generator_client.img2img_payload
     payload.force_task_id = uuid.uuid4().hex
 
-    if isinstance(event, events.CallbackQuery.Event):
-        msg = await event.get_message()
-        msg_txt = msg.text
-        img = await msg.download_media()
-    else:
-        msg_txt = event.message.text
-        if message:
-            img = await message.download_media()
-        else:
-            img = await event.message.download_media()
+    if not message.media:
+        await event.respond("no message media!")
+        return
 
-    payload.prompt, payload.negative_prompt = message_to_prompt(msg_txt)
+    img = await download_image(message, os.path.realpath(""))
+    print(img)
+    payload.prompt, payload.negative_prompt = message_to_prompt(text)
 
     with open(img, "rb") as file:
         b64img = base64.b64encode(file.read()).decode("utf-8")
@@ -275,45 +297,44 @@ async def generate_img2img(
         b64img,
     ]
 
-    # if in_memory:
-    #     bytes_arr = bytearray()
-    #     async for chunk in event.client.iter_download(event.photo):
-    #         bytes_arr.extend(chunk)
-    #     init_images = [
-    #         base64.b64encode(bytes_arr).decode("utf-8"),
-    #     ]
-    # else:
-    #     img = await event.message.download_media()
-
-    #     with open(img, "rb") as file:
-    #         b64img = base64.b64encode(file.read()).decode("utf-8")
-    #     init_images = [
-    #         b64img,
-    #     ]
     payload.init_images = init_images
 
     generate = asyncio.create_task(generator_client.img2img(payload))
     progress = asyncio.create_task(
-        update_progress(generator_client, event, payload.force_task_id)
+        update_progress(generator_client, message, payload.force_task_id)
     )
     await generate
     await progress
     info = json.loads(generate.result().info)
-    # print(infotext)
     progress_text = progress.result().message
-    # print(progress_text)
+    buttons = [Button.inline("Regen"), Button.inline("File")]
+    upload_files = []
+    info_texts = []
     for infotext, image in create_infotext(info, generate.result().images, "img2img"):
-        img_file = await event.client.upload_file(
+        upload_file = await event.client.upload_file(
             base64.b64decode(image),
-            file_name=f"img2img-{utils.timestamp()}.png",
+            file_name=f"txt2img-{utils.timestamp()}.png",
         )
+        upload_files.append(upload_file)
+        info_texts.append(infotext)
+
+    if len(upload_files) > 1:
+        # print(info_texts)
         edit_msg = await progress.result().edit(
-            file=img_file,
-            text=f"{infotext}",
-            force_document=False,
-            buttons=[Button.inline("Regen"), Button.inline("File")],
+            text=f"{info_texts[0]}",
+            buttons=buttons,
         )
-        generator_client.tg_msg_id_input_files[edit_msg.id] = img_file
+        photoalbum = await event.respond(
+            file=upload_files,
+            reply_to=edit_msg.id,
+        )
+    else:
+        edit_msg = await progress.result().edit(
+            file=upload_files[0],
+            text=f"{info_texts[0]}",
+            buttons=buttons,
+        )
+    generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
 
 
 async def start_command(event: events.NewMessage.Event):
@@ -634,17 +655,17 @@ async def menu_memory_info(event, generator_client):
     await event.edit(text=text, buttons=buttons)
 
 
-async def regen(event, generator_client):
+async def regen(event):
     await event.answer("ok")
     message = await event.get_message()
-    print(message.text)
     message_title = message_head(message.text)
     if message_title:
         print(message_title)
         if message_title == "img2img":
-            await generate_img2img(event, message=message)
+            reply_to = await message.get_reply_message()
+            await generate_img2img(event, message=reply_to, text=message.text)
         elif message_title == "txt2img":
-            await generate_txt2img(event, message=message.text)
+            await generate_txt2img(event, text=message.text)
 
 
 async def send_as_file(
@@ -708,7 +729,7 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
     #     events.CallbackQuery(data=b'Current')
     try:
         if event.data == b"Regen":
-            await regen(event, generator_client)
+            await regen(event)
         elif event.data == b"File":
             await send_as_file(event, generator_client)
         elif event.data == b"Intrrupt":
