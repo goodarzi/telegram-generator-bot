@@ -11,7 +11,7 @@ from typing import Union
 from .generators.webui import WebuiClient
 from .generators.forge import ForgeClient
 from .helpers import utils
-from .helpers.telegram import button_inline_list, Button
+from .helpers.telegram import button_inline_list, download_image, Button
 
 from .telegrambot import TelegramBot
 from telethon import events, errors, types
