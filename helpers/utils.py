@@ -71,3 +71,16 @@ def create_progress_bar(progress, total_bars=10):
     remaining_bars = total_bars - completed_bars
     progress_bar = "█" * completed_bars + "░" * remaining_bars
     return progress_bar
+
+
+def check_obj_attr_type(obj, name, val):
+    if not hasattr(obj, name):
+        raise AttributeError(
+            "%s attribute not found on %s"
+            % (
+                name,
+                type(obj).__name__,
+            )
+        )
+    attr_type = type(obj.__getattribute__(name))
+    return attr_type(val)

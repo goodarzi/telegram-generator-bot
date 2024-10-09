@@ -1,6 +1,5 @@
-from . import telegram, utils
+from . import utils
 
 __all__ = [
-    "telegram",
     "utils",
 ]

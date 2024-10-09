@@ -224,6 +224,8 @@ class ForgeClient:
                 self.logger.setLevel(kwargs["log_level"])
 
             self.tg_msg_id_input_files = {}
+            self.img2img_payload = WebuiImg2Img()
+            self.txt2img_payload = WebuiTxt2Img()
             self.set_forge_preset()
 
     @staticmethod
@@ -666,6 +668,21 @@ class ForgeClient:
             options_payload[k] = value_intype
         self.options_post(options_payload)
 
+    def set_txt2img_payload(self, k, v):
+        print(type(self.txt2img_payload.cfg_scale))
+        k_lower = k.lower()
+        if not hasattr(self.txt2img_payload, k_lower):
+            raise AttributeError(
+                "%s attribute not found on %s"
+                % (
+                    k,
+                    type(self.txt2img_payload).__name__,
+                )
+            )
+        attr_type = type(getattr(self.txt2img_payload, k_lower))
+        value_intype = attr_type(v)
+        self.txt2img_payload = value_intype
+
     def set_forge_preset(self, preset: str = None):
         if not preset:
             options = self.options_get()
@@ -679,12 +696,14 @@ class ForgeClient:
             self.txt2img_payload = WebuiTxt2Img(
                 height=640,
                 width=512,
+                cfg_scale=7.0,
                 sampler_name="Euler a",
                 scheduler="Automatic",
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
                 resize_mode=1,
+                cfg_scale=7.0,
                 sampler_name="Euler a",
                 scheduler="Automatic",
                 steps=20,
@@ -693,7 +712,7 @@ class ForgeClient:
             self.txt2img_payload = WebuiTxt2Img(
                 height=1152,
                 width=896,
-                cfg_scale=5,
+                cfg_scale=5.0,
                 sampler_name="DPM++ 2M SDE",
                 scheduler="Karras",
                 steps=20,
@@ -702,7 +721,7 @@ class ForgeClient:
                 resize_mode=1,
                 height=1152,
                 width=896,
-                cfg_scale=5,
+                cfg_scale=5.0,
                 sampler_name="DPM++ 2M SDE",
                 scheduler="Karras",
                 steps=20,
@@ -711,7 +730,7 @@ class ForgeClient:
             self.txt2img_payload = WebuiTxt2Img(
                 height=1152,
                 width=896,
-                cfg_scale=1,
+                cfg_scale=1.0,
                 sampler_name="Euler",
                 scheduler="Simple",
                 steps=20,
@@ -720,7 +739,7 @@ class ForgeClient:
                 resize_mode=1,
                 height=1152,
                 width=896,
-                cfg_scale=1,
+                cfg_scale=1.0,
                 sampler_name="Euler",
                 scheduler="Simple",
                 steps=20,
@@ -732,7 +751,7 @@ class ForgeClient:
                 steps=20,
             )
             self.img2img_payload = WebuiImg2Img(
-                resize_mode=1,
+                resize_mode=1.0,
                 sampler_name="DPM++ 2M",
                 scheduler="Automatic",
                 steps=20,

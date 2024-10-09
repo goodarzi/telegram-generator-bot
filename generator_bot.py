@@ -8,13 +8,17 @@ import json
 from http import HTTPStatus
 from httpx import ConnectError, BasicAuth
 from typing import Union
-from .generators.webui import WebuiClient
-from .generators.forge import ForgeClient
-from .helpers import utils
-from .helpers.telegram import button_inline_list, download_image, Button
-
-from .telegrambot import TelegramBot
-from telethon import events, errors, types
+from generators.webui import WebuiClient
+from generators.forge import ForgeClient
+from helpers import utils
+from bot import (
+    TelegramBot,
+    Message,
+    Button,
+    NewMessage,
+    MessageEdited,
+    CallbackQuery,
+)
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config_file = os.path.join(dir_path, "config.yaml")
@@ -62,19 +66,6 @@ def get_image_generator(event):
             out_dir=output_dir,
             auth=auth,
         )
-
-
-def check_obj_attr_type(obj, name, val):
-    if not hasattr(obj, name):
-        raise AttributeError(
-            "%s attribute not found on %s"
-            % (
-                name,
-                type(obj).__name__,
-            )
-        )
-    attr_type = type(obj.__getattribute__(name))
-    return attr_type(val)
 
 
 def message_to_prompt(message: str):
@@ -127,8 +118,9 @@ def get_full_path(path):
             return full_path
 
 
-async def update_progress(generator_client, msg, id_task):
-    status = None
+async def update_progress(generator_client, message: Message, id_task) -> Message:
+    status: Message = None
+    waited = None
     buttons = [Button.inline("Intrrupt"), Button.inline("Skip")]
     last_text = ""
     async for s in generator_client.task_progress(id_task):
@@ -136,9 +128,13 @@ async def update_progress(generator_client, msg, id_task):
         if not status:
             if s[1]:
                 picframe = save_live_image(s[1])
-            else:
+            elif waited:
                 picframe = os.path.join(dir_path, "helpers/folder-adwaita-pictures.png")
-            status = await msg.reply(
+            else:
+                asyncio.sleep(1)
+                waited = True
+                continue
+            status = await message.reply(
                 message=status_text,
                 file=picframe,
                 thumb=None,
@@ -191,30 +187,29 @@ def create_infotext(info, images, gentype: str):
 
 
 async def generate_txt2img(
-    event: Union[
-        events.NewMessage.Event, events.MessageEdited.Event, events.CallbackQuery.Event
-    ],
+    event: Union[NewMessage.Event, MessageEdited.Event, CallbackQuery.Event],
+    message: Message = None,
     text: str = None,
 ):
     generator_client = get_image_generator(event)
     payload = generator_client.txt2img_payload
     payload.force_task_id = uuid.uuid4().hex
+    if not message:
+        message = event.message
     if text:
         payload.prompt, payload.negative_prompt = message_to_prompt(text)
     elif event.pattern_match:
         payload.prompt = event.pattern_match[1]
     else:
-        payload.prompt, payload.negative_prompt = message_to_prompt(event.message.text)
+        payload.prompt, payload.negative_prompt = message_to_prompt(message.text)
 
     async with asyncio.TaskGroup() as tg:
         generate = tg.create_task(generator_client.txt2img(payload))
         progress = tg.create_task(
-            update_progress(generator_client, event.message, payload.force_task_id)
+            update_progress(generator_client, message, payload.force_task_id)
         )
-    info = json.loads(generate.result().info)
 
-    progress_text = progress.result().message
-    # print(progress_text)
+    info = json.loads(generate.result().info)
     buttons = [Button.inline("Regen"), Button.inline("File")]
     upload_files = []
     info_texts = []
@@ -245,15 +240,13 @@ async def generate_txt2img(
     generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
 
 
-async def check_reply(
-    event: Union[events.NewMessage.Event, events.MessageEdited.Event]
-):
+async def check_reply(event: Union[NewMessage.Event, MessageEdited.Event]):
     reply_message = await event.message.get_reply_message()
     if reply_message.file.mime_type in ["image/png", "image/jpg", "image/jpeg"]:
         await generate_img2img(event, reply_message, text=event.message.text)
 
 
-async def clip(event: events.NewMessage.Event):
+async def clip(event: NewMessage.Event):
     generator_client = get_image_generator(event)
     img = await event.message.download_media()
     with open(img, "rb") as file:
@@ -264,7 +257,7 @@ async def clip(event: events.NewMessage.Event):
     await event.respond(str(result))
 
 
-async def png_info(event: events.NewMessage.Event):
+async def png_info(event: NewMessage.Event):
     generator_client = get_image_generator(event)
     img = await event.message.download_media()
     with open(img, "rb") as file:
@@ -287,7 +280,7 @@ async def generate_img2img(event, message, text: str = None):
         await event.respond("no message media!")
         return
 
-    img = await download_image(message, os.path.realpath(""))
+    img = await TelegramBot.download_image(message, os.path.realpath(""))
     print(img)
     payload.prompt, payload.negative_prompt = message_to_prompt(text)
 
@@ -306,7 +299,7 @@ async def generate_img2img(event, message, text: str = None):
     await generate
     await progress
     info = json.loads(generate.result().info)
-    progress_text = progress.result().message
+    # progress_text = progress.result().message
     buttons = [Button.inline("Regen"), Button.inline("File")]
     upload_files = []
     info_texts = []
@@ -337,13 +330,20 @@ async def generate_img2img(event, message, text: str = None):
     generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
 
 
-async def start_command(event: events.NewMessage.Event):
-    buttons = [
-        Button.text("Checkpoints"),
-        Button.text("Lora"),
-        Button.text("Memory info"),
-    ]
-    await event.respond(message="Welcome:", buttons=buttons)
+async def start_command(event: NewMessage.Event):
+    text = f"Welcome:\n"
+    text += f"`/menu` : Main menu\n"
+    text += f"Generate txt2img:\n"
+    text += f"Send prompt with following format , negative prompt is optional:\n"
+    text += f"`/p [prompt] /n [negative prompt]` : Generate Image\n"
+    text += f"`/txt2img [option] [value]` : Set txt2img options\n"
+    text += f"Generate img2img:\n"
+    text += (
+        f"Reply any image file in chat with prompt will run img2img for that image\n"
+    )
+    text += f"`/img2img [option] [value]` : Set img2img options\n"
+
+    await event.respond(message=text)
 
 
 async def menu(event, generator_client=None):
@@ -361,9 +361,9 @@ async def menu(event, generator_client=None):
 
         options = generator_client.options_get()
     except Exception as e:
-        if isinstance(event, events.NewMessage.Event):
+        if isinstance(event, NewMessage.Event):
             await event.respond(message=str(e), buttons=buttons)
-        elif isinstance(event, events.CallbackQuery.Event):
+        elif isinstance(event, CallbackQuery.Event):
             await event.edit(text=str(e), buttons=buttons)
         return
     text += f"**├─Checkpoint:** {options.sd_model_checkpoint}\n"
@@ -371,9 +371,9 @@ async def menu(event, generator_client=None):
     if isinstance(generator_client, ForgeClient):
         text += f"**├─Forge preset:** {options.forge_preset}\n"
         buttons.insert(0, [Button.inline("forge")])
-    if isinstance(event, events.NewMessage.Event):
+    if isinstance(event, NewMessage.Event):
         await event.respond(message=text, buttons=buttons)
-    elif isinstance(event, events.CallbackQuery.Event):
+    elif isinstance(event, CallbackQuery.Event):
         await event.edit(text=text, buttons=buttons)
 
 
@@ -503,12 +503,12 @@ async def menu_forge_additional_modules(event, generator_client, data_str: str =
     text += f"VAE / Text Encoder:\n"
     for i in forge_additional_modules:
         text += f"  - {i}\n"
-    buttons = button_inline_list(generator_client.sd_modules())
+    buttons = TelegramBot.button_inline_list(generator_client.sd_modules())
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
 
-async def options(event: events.NewMessage.Event):
+async def options(event: NewMessage.Event):
     generator_client = get_image_generator(event)
     message: str = event.message.text
     option = message.split()
@@ -543,7 +543,7 @@ async def menu_stable_diffusion_checkpoint(
     else:
         text = f"Menu/Stable Diffusion checkpoints:\n"
         result = generator_client.model()
-        buttons = button_inline_list(result)
+        buttons = TelegramBot.button_inline_list(result)
         buttons.append(
             [
                 Button.inline("Back"),
@@ -580,7 +580,7 @@ async def menu_txt2img_sampler_name(event, generator_client, data_str: str = Non
     text = f"**Menu/txt2img/sampler_name:**\n"
     current_sampler = generator_client.txt2img_payload.sampler_name
     samplers = generator_client.get_samplers()
-    buttons = button_inline_list(samplers)
+    buttons = TelegramBot.button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -592,21 +592,18 @@ async def menu_txt2img_scheduler(event, generator_client, data_str: str = None):
     text = f"**Menu/txt2img/scheduler:**\n"
     current_scheduler = generator_client.txt2img_payload.scheduler
     schedulers = generator_client.get_schedulers()
-    buttons = button_inline_list(schedulers)
+    buttons = TelegramBot.button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
 
-async def set_txt2img_payload(event: events.NewMessage.Event):
+async def set_txt2img_payload(event: NewMessage.Event):
     generator_client = get_image_generator(event)
     message: str = event.message.text
     option = message.split()
-    int
     try:
-        val = check_obj_attr_type(
-            generator_client.txt2img_payload, option[1], option[2]
-        )
-        generator_client.txt2img_payload.__setattr__(option[1], val)
+        setattr(generator_client.txt2img_payload, option[1], option[2])
+        print(type(generator_client.txt2img_payload.__getattribute__(option[1])))
     except (AttributeError, TypeError, ValueError) as e:
         await event.respond(message=str(e))
 
@@ -636,7 +633,7 @@ async def menu_img2img_sampler_name(event, generator_client, data_str: str = Non
     text = f"**Menu/img2img/sampler_name:**\n"
     current_sampler = generator_client.img2img_payload.sampler_name
     samplers = generator_client.get_samplers()
-    buttons = button_inline_list(samplers)
+    buttons = TelegramBot.button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -648,18 +645,22 @@ async def menu_img2img_scheduler(event, generator_client, data_str: str = None):
     text = f"**Menu/img2img/scheduler:**\n"
     current_scheduler = generator_client.img2img_payload.scheduler
     schedulers = generator_client.get_schedulers()
-    buttons = button_inline_list(schedulers)
+    buttons = TelegramBot.button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
 
-async def set_img2img_payload(event: events.NewMessage.Event):
+async def set_img2img_payload(event: NewMessage.Event):
     generator_client = get_image_generator(event)
     message: str = event.message.text
     option = message.split()
     try:
-        check_obj_attr_type(generator_client.img2img_payload, option[1], option[2])
-        generator_client.img2img_payload.__setattr__(option[1], option[2])
+        utils.check_obj_attr_type(
+            generator_client.img2img_payload, option[1], option[2]
+        )
+        attr_type = type(getattr(generator_client.img2img_payload, option[1]))
+        value_intype = attr_type(option[2])
+        generator_client.img2img_payload.__setattr__(option[1], value_intype)
     except (AttributeError, TypeError) as e:
         await event.respond(message=str(e))
 
@@ -685,7 +686,7 @@ async def menu_png_info(event, generator_client):
 
 async def menu_lora(event, generator_client):
     text = f"**Menu/lora:**\n\n"
-    buttons = button_inline_list(generator_client.lora())
+    buttons = TelegramBot.button_inline_list(generator_client.lora())
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
 
@@ -712,11 +713,11 @@ async def regen(event):
             reply_to = await message.get_reply_message()
             await generate_img2img(event, message=reply_to, text=message.text)
         elif message_title == "txt2img":
-            await generate_txt2img(event, text=message.text)
+            await generate_txt2img(event, message=message, text=message.text)
 
 
 async def send_as_file(
-    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+    event: CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
 ):
     message = await event.get_message()
     if message.id in generator_client.tg_msg_id_input_files:
@@ -729,7 +730,7 @@ async def send_as_file(
 
 
 async def intrrupt(
-    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+    event: CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
 ):
     result = generator_client.interrupt_post()
     print(result)
@@ -737,7 +738,7 @@ async def intrrupt(
 
 
 async def skip(
-    event: events.CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
+    event: CallbackQuery.Event, generator_client: Union[WebuiClient, ForgeClient]
 ):
     result = generator_client.skip_post()
     print(result)
@@ -757,7 +758,7 @@ async def skip(
 #     await event.edit(text=text, buttons=buttons)
 
 
-async def callback_query_handler(event: events.CallbackQuery.Event):
+async def callback_query_handler(event: CallbackQuery.Event):
     generator_client = get_image_generator(event)
     event_str = event.data.decode("utf-8")
     message = await event.get_message()
@@ -765,9 +766,6 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
     back_menu = re.search(back_menu_pattern, message.text)
     current_menu_pattern = re.compile("/?([\w\s]+):")
     current_menu = re.search(current_menu_pattern, message.text)
-    #     events.CallbackQuery(data=b'Unload')
-    #     events.CallbackQuery(data=b'Refresh')
-    #     events.CallbackQuery(data=b'Current')
     try:
         if event.data == b"Regen":
             await regen(event)
@@ -857,20 +855,6 @@ async def callback_query_handler(event: events.CallbackQuery.Event):
         await event.answer(str(e))
 
 
-def media_is_png(event):
-    if event.file:
-        print(f"{event.file.mime_type=}")
-        if isinstance(event.file.media, types.Document):
-            if event.file.mime_type == "image/png":
-                return True
-
-
-def media_is_photo(event):
-    if event.file:
-        if isinstance(event.file.media, types.Photo):
-            return True
-
-
 async def main():
 
     session = os.path.basename(__file__).split(".")[0]
@@ -896,49 +880,43 @@ async def main():
 
     telegram_client.add_event_handler(
         callback=start_command,
-        event=events.NewMessage(
-            chats=allowed_chat_ids, incoming=True, pattern="(?i)/start$"
-        ),
+        event=NewMessage(chats=allowed_chat_ids, incoming=True, pattern="(?i)/start$"),
     )
 
     telegram_client.add_event_handler(
         callback=menu,
-        event=events.NewMessage(
-            chats=allowed_chat_ids, incoming=True, pattern="(?i)/menu$"
-        ),
+        event=NewMessage(chats=allowed_chat_ids, incoming=True, pattern="(?i)/menu$"),
     )
 
     telegram_client.add_event_handler(
         callback=generate_txt2img,
-        event=events.NewMessage(
-            chats=allowed_chat_ids, incoming=True, pattern="/img\s(.*)$"
-        ),
+        event=NewMessage(chats=allowed_chat_ids, incoming=True, pattern="/img\s(.*)$"),
     )
 
     telegram_client.add_event_handler(
         callback=generate_txt2img,
-        event=events.MessageEdited(
+        event=MessageEdited(
             chats=allowed_chat_ids, incoming=True, pattern="/img\s(.*)$"
         ),
     )
 
     telegram_client.add_event_handler(
         callback=set_txt2img_payload,
-        event=events.NewMessage(
+        event=NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/txt2img\s(.*)$"
         ),
     )
 
     telegram_client.add_event_handler(
         callback=set_img2img_payload,
-        event=events.NewMessage(
+        event=NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/img2img\s(.*)$"
         ),
     )
 
     telegram_client.add_event_handler(
         callback=options,
-        event=events.NewMessage(
+        event=NewMessage(
             chats=allowed_chat_ids, incoming=True, pattern="/options\s(.*)$"
         ),
     )
@@ -946,27 +924,25 @@ async def main():
     telegram_client.add_event_handler(
         # callback=generate_img2img,
         callback=clip,
-        event=events.NewMessage(
-            chats=allowed_chat_ids, incoming=True, func=lambda e: e.photo
-        ),
+        event=NewMessage(chats=allowed_chat_ids, incoming=True, func=lambda e: e.photo),
     )
 
     telegram_client.add_event_handler(
         callback=png_info,
-        event=events.NewMessage(
-            chats=allowed_chat_ids, incoming=True, func=media_is_png
+        event=NewMessage(
+            chats=allowed_chat_ids, incoming=True, func=TelegramBot.media_is_png
         ),
     )
 
     telegram_client.add_event_handler(
         callback=check_reply,
-        event=events.NewMessage(
+        event=NewMessage(
             chats=allowed_chat_ids, incoming=True, func=lambda e: e.message.is_reply
         ),
     )
 
     telegram_client.add_event_handler(
-        callback_query_handler, events.CallbackQuery(chats=allowed_chat_ids)
+        callback_query_handler, CallbackQuery(chats=allowed_chat_ids)
     )
 
     logger.info("Generator Bot is active.")
