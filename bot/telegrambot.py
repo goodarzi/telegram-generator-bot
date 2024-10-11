@@ -20,6 +20,14 @@ from telethon.custom import (
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
 
+def _download_path():
+    file_dir = os.path.dirname(os.path.realpath(__file__))
+    downloads_dir = os.path.join(dir_path, "downloads")
+    if not os.path.exists(downloads_dir):
+        os.mkdir(downloads_dir)
+    return downloads_dir
+
+
 class TelegramBot(TelegramClient):
 
     def __init__(self, config):
@@ -66,6 +74,8 @@ class TelegramBot(TelegramClient):
             self.respond_not_allowed,
             NewMessage(chats=self.allow_chats, blacklist_chats=True, incoming=True),
         )
+
+        self.download_path = _download_path()
 
     def sigint_handler(self):
         self.logger.warning("SIGINT or CTRL-C detected. Exiting gracefully")
@@ -123,11 +133,19 @@ class TelegramBot(TelegramClient):
         return file
 
     @staticmethod
-    async def download_image(message: Message, path: str):
-        file = TelegramBot.file_id(message)
-        if not file:
-            return
-        file_path = os.path.join(path, file["base_name"])
+    def media_id(message: Message):
+        if not message.file:
+            return None
+        return message.media.photo.id if message.photo else message.media.document.id
+
+    async def download_image(self, message: Message, path: str = None):
+        media_id = TelegramBot.media_id(message)
+        if not path:
+            path = self.download_path
+        if not media_id:
+            return None
+        file_name = str(media_id) + message.file.ext
+        file_path = os.path.join(path, file_name)
         if os.path.exists(file_path):
             if os.path.getsize(file_path) == message.file.size:
                 return file_path

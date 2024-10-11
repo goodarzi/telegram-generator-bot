@@ -195,7 +195,7 @@ async def generate_img2img(event, message, text: str = None):
         await event.respond("no message media!")
         return
 
-    img = await TelegramBot.download_image(message, os.path.realpath(""))
+    img = await event.client.download_image(message)
     print(img)
     payload.prompt, payload.negative_prompt = GeneratorClient.txt2prompt(text)
 
