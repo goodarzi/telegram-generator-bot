@@ -38,12 +38,20 @@ def get_full_path(path):
             return full_path
 
 
-async def update_progress(generator_client, message: Message, id_task) -> Message:
+async def update_progress(message: Message, id_task, payload_info=None) -> Message:
     status: Message = None
-    waited = None
     buttons = [Button.inline("Intrrupt"), Button.inline("Skip")]
     last_text = ""
+    generator_client = GeneratorClient(message.chat_id).image
     async for progress, livephoto, info in generator_client.task_progress(id_task):
+        text = payload_info if payload_info else ""
+        if info:
+            text += f"{info}\n"
+        text += f"\n📥 : [{utils.create_progress_bar(progress*100)}]"
+        if last_text != text:
+            last_text = text
+        else:
+            continue
         if not status:
             upload_livephoto = (
                 await message.client.upload_file(
@@ -51,29 +59,25 @@ async def update_progress(generator_client, message: Message, id_task) -> Messag
                     file_name=f"{livephoto[0]}",
                 )
                 if livephoto
-                else None
+                else b"0"
             )
 
             status = await message.reply(
-                message=info,
+                message=text,
                 file=upload_livephoto,
                 thumb=None,
                 buttons=buttons,
             )
             continue
-
-        text = f"{info}\n"
-        text += f"\n📥 : [{utils.create_progress_bar(progress*100)}]"
-        if last_text != text:
-            last_text = text
-        else:
-            continue
         try:
             if livephoto:
-                # await status.edit(
-                #     text=text, buttons=buttons, file=livephoto[1]
-                # )
-                await status.edit(text=text, buttons=buttons)
+                if not status.photo:
+                    file = await message.client.upload_file(
+                        livephoto[1], file_name=f"{livephoto[0]}"
+                    )
+                    status = await status.edit(text=text, buttons=buttons, file=file)
+                else:
+                    await status.edit(text=text, buttons=buttons)
             else:
                 await status.edit(text=text, buttons=buttons)
         except Exception as e:
@@ -87,9 +91,11 @@ async def generate_txt2img(
     message: Message = None,
     text: str = None,
 ):
+    buttons = [Button.inline("Regen"), Button.inline("File")]
     generator_client = GeneratorClient(event.chat_id).image
     payload = generator_client.txt2img_payload
     payload.force_task_id = uuid.uuid4().hex
+
     if not message:
         message = event.message
     if text:
@@ -101,30 +107,39 @@ async def generate_txt2img(
             message.text
         )
 
+    payload_info = (
+        f"`/p {payload.prompt}`\n"
+        if not payload.negative_prompt
+        else f"`/p {payload.prompt}` `/n {payload.negative_prompt}`\n"
+    )
+    payload_info = f"**txt2img:** \n" + payload_info
+
+    for k in generator_client.txt2img_info():
+        payload_info += (
+            f"`/txt2img {k} {getattr(generator_client.txt2img_payload, k)}` \n"
+        )
+
     async with asyncio.TaskGroup() as tg:
         generate = tg.create_task(generator_client.txt2img(payload))
         progress = tg.create_task(
-            update_progress(generator_client, message, payload.force_task_id)
+            update_progress(message, payload.force_task_id, payload_info)
         )
 
     info = json.loads(generate.result().info)
-    buttons = [Button.inline("Regen"), Button.inline("File")]
-    upload_files = []
-    info_texts = []
-    for infotext, image in GeneratorClient.create_infotext(
-        info, generate.result().images, "txt2img"
-    ):
-        upload_file = await event.client.upload_file(
+    payload_info += f"`/txt2img seed {info['all_seeds']}`\n"
+
+    upload_files = [
+        await event.client.upload_file(
             base64.b64decode(image),
             file_name=f"txt2img-{utils.timestamp()}.png",
         )
-        upload_files.append(upload_file)
-        info_texts.append(infotext)
+        for image in generate.result().images
+    ]
 
     if len(upload_files) > 1 or (not progress.result().photo):
         # print(info_texts)
         edit_msg = await progress.result().edit(
-            text=f"{info_texts[0]}",
+            text=f"{payload_info}",
             buttons=buttons,
         )
         photoalbum = await event.respond(
@@ -134,7 +149,7 @@ async def generate_txt2img(
     else:
         edit_msg = await progress.result().edit(
             file=upload_files[0],
-            text=f"{info_texts[0]}",
+            text=f"{payload_info}",
             buttons=buttons,
         )
     generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
@@ -171,7 +186,7 @@ async def png_info(event: NewMessage.Event):
 
 
 async def generate_img2img(event, message, text: str = None):
-
+    buttons = [Button.inline("Regen"), Button.inline("File")]
     generator_client = GeneratorClient(event.chat_id).image
     payload = generator_client.img2img_payload
     payload.force_task_id = uuid.uuid4().hex
@@ -192,31 +207,39 @@ async def generate_img2img(event, message, text: str = None):
 
     payload.init_images = init_images
 
-    generate = asyncio.create_task(generator_client.img2img(payload))
-    progress = asyncio.create_task(
-        update_progress(generator_client, message, payload.force_task_id)
+    payload_info = (
+        f"`/p {payload.prompt}`\n"
+        if not payload.negative_prompt
+        else f"`/p {payload.prompt}` `/n {payload.negative_prompt}`\n"
     )
-    await generate
-    await progress
+    payload_info = f"**img2img:** \n" + payload_info
+
+    for k in generator_client.img2img_info():
+        payload_info += (
+            f"`/img2img {k} {str(getattr(generator_client.txt2img_payload, k))}` \n"
+        )
+
+    async with asyncio.TaskGroup() as tg:
+        generate = tg.create_task(generator_client.img2img(payload))
+        progress = tg.create_task(
+            update_progress(message, payload.force_task_id, payload_info)
+        )
+
     info = json.loads(generate.result().info)
-    # progress_text = progress.result().message
-    buttons = [Button.inline("Regen"), Button.inline("File")]
-    upload_files = []
-    info_texts = []
-    for infotext, image in GeneratorClient.create_infotext(
-        info, generate.result().images, "img2img"
-    ):
-        upload_file = await event.client.upload_file(
+    payload_info += f"`/txt2img seed {info['all_seeds']}`\n"
+
+    upload_files = [
+        await event.client.upload_file(
             base64.b64decode(image),
             file_name=f"txt2img-{utils.timestamp()}.png",
         )
-        upload_files.append(upload_file)
-        info_texts.append(infotext)
+        for image in generate.result().images
+    ]
 
-    if len(upload_files) > 1:
+    if len(upload_files) > 1 or (not progress.result().photo):
         # print(info_texts)
         edit_msg = await progress.result().edit(
-            text=f"{info_texts[0]}",
+            text=f"{payload_info}",
             buttons=buttons,
         )
         photoalbum = await event.respond(
@@ -226,7 +249,7 @@ async def generate_img2img(event, message, text: str = None):
     else:
         edit_msg = await progress.result().edit(
             file=upload_files[0],
-            text=f"{info_texts[0]}",
+            text=f"{payload_info}",
             buttons=buttons,
         )
     generator_client.tg_msg_id_input_files[edit_msg.id] = upload_files
@@ -244,8 +267,25 @@ async def start_command(event: NewMessage.Event):
         f"Reply any image file in chat with prompt will run img2img for that image\n"
     )
     text += f"`/img2img [option] [value]` : Set img2img options\n"
+    buttons = [
+        [
+            Button.text("/menu", resize=True, single_use=True),
+            Button.text("/sd_model", resize=True, single_use=True),
+            Button.text("/txt2img", resize=True, single_use=True),
+            Button.text("/img2img", resize=True, single_use=True),
+        ],
+        [
+            Button.text("/extras", resize=True, single_use=True),
+            Button.text("/meminfo", resize=True, single_use=True),
+            Button.text("/lora", resize=True, single_use=True),
+        ],
+    ]
 
-    await event.respond(message=text)
+    await event.respond(message=text, buttons=buttons)
+
+
+async def clear_buttons(event: NewMessage.Event):
+    await event.respond(message="Buttons cleared", buttons=Button.clear())
 
 
 async def menu(event, generator_client=None):
@@ -423,8 +463,10 @@ async def options(event: NewMessage.Event):
 
 
 async def menu_stable_diffusion_checkpoint(
-    event, generator_client, data_str: str = None
+    event, generator_client=None, data_str: str = None
 ):
+    if not generator_client:
+        generator_client = GeneratorClient(event.chat_id).image
     if data_str:
         if data_str == "Refresh":
             await generator_client.refresh_checkpoints_post()
@@ -454,25 +496,31 @@ async def menu_stable_diffusion_checkpoint(
                 Button.inline("Unload"),
             ]
         )
-        await event.edit(text=text, buttons=buttons)
+        if isinstance(event, NewMessage.Event):
+            await event.respond(message=text, buttons=buttons)
+        else:
+            await event.edit(text=text, buttons=buttons)
 
 
-async def menu_txt2img(event, generator_client):
+async def menu_txt2img(event, generator_client=None):
     text = f"Menu/txt2img:\n"
     text += f"Enter settings in following format:\n"
+    if not generator_client:
+        generator_client = GeneratorClient(event.chat_id).image
     for k in generator_client.txt2img_settings():
         text += f"`/txt2img {k} `: {getattr(generator_client.txt2img_payload, k)} \n"
-    # txt2img_obj = generator_client.txt2img_payload
-    # txt2img_keys = [{a: getattr(txt2img_obj, a)} for a in dir(txt2img_obj) if not a.startswith('__')]
     sampler_name = generator_client.txt2img_payload.sampler_name
-    scheduler = generator_client.txt2img_payload.scheduler
     buttons = [
         [Button.inline(f"{sampler_name=}")],
         [Button.inline("Back")],
     ]
     if isinstance(generator_client, ForgeClient):
+        scheduler = generator_client.txt2img_payload.scheduler
         buttons.insert(1, [Button.inline(f"{scheduler=}")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, CallbackQuery.Event):
+        await event.edit(text=text, buttons=buttons)
+    else:
+        await event.respond(message=text, buttons=buttons)
 
 
 async def menu_txt2img_sampler_name(event, generator_client, data_str: str = None):
@@ -484,7 +532,10 @@ async def menu_txt2img_sampler_name(event, generator_client, data_str: str = Non
     samplers = generator_client.get_samplers()
     buttons = TelegramBot.button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def menu_txt2img_scheduler(event, generator_client, data_str: str = None):
@@ -496,7 +547,10 @@ async def menu_txt2img_scheduler(event, generator_client, data_str: str = None):
     schedulers = generator_client.get_schedulers()
     buttons = TelegramBot.button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def set_txt2img_payload(event: NewMessage.Event):
@@ -510,22 +564,25 @@ async def set_txt2img_payload(event: NewMessage.Event):
         await event.respond(message=str(e))
 
 
-async def menu_img2img(event, generator_client):
+async def menu_img2img(event, generator_client=None):
     text = f"Menu/img2img:\n"
     text += f"Enter settings in following format:\n"
+    if not generator_client:
+        generator_client = GeneratorClient(event.chat_id).image
     for k in generator_client.img2img_settings():
         text += f"`/img2img {k} `: {getattr(generator_client.img2img_payload, k)} \n"
-    # txt2img_obj = generator_client.img2img_payload
-    # txt2img_keys = [{a: getattr(img2img_obj, a)} for a in dir(img2img_obj) if not a.startswith('__')]
     sampler_name = generator_client.img2img_payload.sampler_name
-    scheduler = generator_client.img2img_payload.scheduler
     buttons = [
         [Button.inline(f"{sampler_name=}")],
         [Button.inline("Back")],
     ]
     if isinstance(generator_client, ForgeClient):
+        scheduler = generator_client.img2img_payload.scheduler
         buttons.insert(1, [Button.inline(f"{scheduler=}")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, CallbackQuery.Event):
+        await event.edit(text=text, buttons=buttons)
+    else:
+        await event.respond(message=text, buttons=buttons)
 
 
 async def menu_img2img_sampler_name(event, generator_client, data_str: str = None):
@@ -537,7 +594,10 @@ async def menu_img2img_sampler_name(event, generator_client, data_str: str = Non
     samplers = generator_client.get_samplers()
     buttons = TelegramBot.button_inline_list(samplers)
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def menu_img2img_scheduler(event, generator_client, data_str: str = None):
@@ -549,7 +609,10 @@ async def menu_img2img_scheduler(event, generator_client, data_str: str = None):
     schedulers = generator_client.get_schedulers()
     buttons = TelegramBot.button_inline_list(schedulers)
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def set_img2img_payload(event: NewMessage.Event):
@@ -571,7 +634,10 @@ async def menu_extras(event, generator_client):
     text = f"Menu/Extras:\n"
     buttons = []
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def menu_png_info(event, generator_client):
@@ -583,14 +649,20 @@ async def menu_png_info(event, generator_client):
     text += f"This bot always runs png info for photos that are sent as files.\n"
     buttons = []
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def menu_lora(event, generator_client):
     text = f"**Menu/lora:**\n\n"
     buttons = TelegramBot.button_inline_list(generator_client.lora())
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def menu_memory_info(event, generator_client):
@@ -602,7 +674,10 @@ async def menu_memory_info(event, generator_client):
     text += f"│ ├─Free:{utils.format_byte(result['cuda']['free'])} \tUsed:{utils.format_byte(result['cuda']['used'])} \tTotal:{utils.format_byte(result['cuda']['total'])}\n"
     buttons = []
     buttons.append([Button.inline("Back")])
-    await event.edit(text=text, buttons=buttons)
+    if isinstance(event, NewMessage.Event):
+        await event.respond(message=text, buttons=buttons)
+    else:
+        await event.edit(text=text, buttons=buttons)
 
 
 async def regen(event):
@@ -761,13 +836,28 @@ async def main():
     )
 
     telegram_client.add_event_handler(
+        callback=clear_buttons,
+        event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/clear$"),
+    )
+
+    telegram_client.add_event_handler(
         callback=menu,
         event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/menu$"),
     )
 
     telegram_client.add_event_handler(
+        callback=menu_txt2img,
+        event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/txt2img$"),
+    )
+
+    telegram_client.add_event_handler(
+        callback=menu_img2img,
+        event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/img2img$"),
+    )
+
+    telegram_client.add_event_handler(
         callback=generate_txt2img,
-        event=NewMessage(chats=allow_chats, incoming=True, pattern="/img\s(.*)$"),
+        event=NewMessage(chats=allow_chats, incoming=True, pattern="/p\s(.*)$"),
     )
 
     telegram_client.add_event_handler(

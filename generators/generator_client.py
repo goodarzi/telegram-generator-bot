@@ -102,7 +102,7 @@ class GeneratorClient:
         if len(msg_split) > 1:
             prompt = msg_split[1].strip()
             prompt = prompt.strip("`")
-            prompt = prompt.lstrip("/img ")
+            prompt = prompt.lstrip("/p ")
             if len(msg_split) > 2:
                 msg_split[2] = msg_split[2].strip()
                 if msg_split[2].lower().startswith("negative prompt:"):

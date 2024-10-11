@@ -157,3 +157,7 @@ class TelegramBot(TelegramClient):
         current_menu = re.search(pattern, message)
         if current_menu:
             return current_menu[1]
+
+    @staticmethod
+    def event_not_reply(event: Union[NewMessage.Event, MessageEdited.Event]):
+        return not event.message.is_reply

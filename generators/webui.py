@@ -1,5 +1,4 @@
 import os
-import time
 import logging
 import asyncio
 import pprint
@@ -184,7 +183,7 @@ class WebuiClient:
             WebuiClient.instances.append(self)
             return self
 
-    def __init__(self, base_url: str, out_dir: str, auth: BasicAuth = None, **kwargs):
+    def __init__(self, base_url: str, out_dir: str, auth: dict = None, **kwargs):
         if os.path.exists(out_dir):
             self.out_dir = out_dir
         else:
@@ -194,7 +193,12 @@ class WebuiClient:
         self.img2img_dir = os.path.join(self.out_dir, "img2img")
         self.base_url = base_url
         if auth:
-            self.httpx_args = {"auth": auth}
+            if {"username", "password"} <= auth.keys():
+                self.httpx_args = {
+                    "auth": BasicAuth(
+                        username=auth["username"], password=auth["password"]
+                    )
+                }
         else:
             self.httpx_args = {}
 
@@ -213,7 +217,13 @@ class WebuiClient:
                 self.logger.setLevel(kwargs["log_level"])
 
             self.tg_msg_id_input_files = {}
+            self.img2img_payload = WebuiImg2Img()
+            self.txt2img_payload = WebuiTxt2Img()
             self.set_preset()
+
+    @property
+    def options(self) -> Options:
+        return self.options_get()
 
     @staticmethod
     def encode_file_to_base64(path):
@@ -492,54 +502,60 @@ class WebuiClient:
         return json.loads(progress_response.content)
 
     async def task_progress(self, id_task=None):
-        progress_request = WebuiProgressRequest(id_task=id_task, live_preview=True)
-        # progress_request = WebuiProgressRequest(id_task=id_task)
-        progress = await self.progress_current(progress_request)
+        live_previews_enable = self.options.live_previews_enable
+        refresh_period = (
+            self.options.live_preview_refresh_period / 1000
+            if self.options.live_preview_refresh_period > 0
+            else 1
+        )
+        progress_request = WebuiProgressRequest(
+            id_task=id_task, live_preview=live_previews_enable
+        )
         last_progress = 0.0
+        last_live_preview_id = None
         last_live_preview = None
         while True:
             # progress = await self.progress_current(progress_request)
             response = await self.progress_post(progress_request)
             progress: dict = json.loads(response.content)
-            if progress["live_preview"]:
-                live_preview = progress["live_preview"].split(",")
-                del progress["live_preview"]
-                if len(live_preview) > 1:
-                    live_preview = [
-                        f'{id_task}-{progress["id_live_preview"]}',
-                        live_preview[1],
-                    ]
+            if (not progress["active"]) and (not progress["queued"]):
+                break
+            if (
+                progress["active"]
+                and live_previews_enable
+                and (progress["id_live_preview"] > -1)
+            ):
+                if progress["id_live_preview"] != last_live_preview_id:
+                    last_live_preview_id = progress["id_live_preview"]
+                    live_preview = progress["live_preview"].split(",")
+                    del progress["live_preview"]
+                    if len(live_preview) > 1:
+                        live_preview = [
+                            f'{id_task}-{progress["id_live_preview"]}.{self.options.live_previews_image_format}',
+                            base64.b64decode(live_preview[1]),
+                        ]
+                    else:
+                        live_preview = None
+                else:
+                    live_preview = None
             else:
                 live_preview = None
-            pprint.pprint(progress)
+
+            progress_current = self.progress_get()
+            pprint.pprint(progress_current.progress)
+            pprint.pprint(progress_current.state)
+            pprint.pprint(self.options.live_preview_refresh_period)
             if progress["completed"]:
-                yield (1.0, None, progress["textinfo"])
+                yield (1.0, live_preview, progress["textinfo"])
                 break
             elif progress["progress"] != last_progress:
                 last_progress = progress["progress"]
-                last_live_preview = live_preview
                 if progress["queued"]:
                     yield (0.0, None, progress["textinfo"])
-                else:
+                elif progress["progress"] > 0:
                     yield (progress["progress"], live_preview, progress["textinfo"])
-            await asyncio.sleep(5)
 
-    async def progress(self, task_id=None):
-        last_progress = 0
-        last_image = ""
-        # if progress_request == 1
-        while True:
-            await asyncio.sleep(1)
-            progress_current = self.progress_get()
-            if (not progress_current.progress) or (progress_current.progress == 1.0):
-                yield (1.0, None)
-                break
-            if progress_current.progress != last_progress:
-                last_progress = progress_current.progress
-                if progress_current.current_image == last_image:
-                    yield (progress_current.progress, None)
-                else:
-                    yield (progress_current.progress, progress_current.current_image)
+            await asyncio.sleep(refresh_period)
 
     def get_memory(self):
         meminfo = self.memory_get()
@@ -586,8 +602,28 @@ class WebuiClient:
             result = await self.options_post(body=option_payload)
             return result.status_code
 
+    def txt2img_info(self):
+        payload = [
+            "sampler_name",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+        ]
+        return payload
+
+    def img2img_info(self):
+        payload = [
+            "sampler_name",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "denoising_strength",
+        ]
+        return payload
+
     def txt2img_settings(self):
-        options = self.options_get()
         payload = [
             "sampler_name",
             "steps",
@@ -601,7 +637,6 @@ class WebuiClient:
         return payload
 
     def img2img_settings(self):
-        options = self.options_get()
         inpaint = [
             "mask_blur",
             "inpaint_full_res",
@@ -628,14 +663,15 @@ class WebuiClient:
         self.txt2img_payload = WebuiTxt2Img(
             height=1152,
             width=896,
-            cfg_scale=5,
+            cfg_scale=5.0,
             sampler_name="DPM++ 2M SDE Karras",
             steps=30,
         )
         self.img2img_payload = WebuiImg2Img(
             height=1152,
             width=896,
-            cfg_scale=5,
+            cfg_scale=5.0,
             sampler_name="DPM++ 2M SDE Karras",
             steps=30,
+            denoising_strength=0.75,
         )

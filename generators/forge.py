@@ -194,7 +194,7 @@ class ForgeClient:
             ForgeClient.instances.append(self)
             return self
 
-    def __init__(self, base_url: str, out_dir: str, auth: BasicAuth = None, **kwargs):
+    def __init__(self, base_url: str, out_dir: str, auth: dict = None, **kwargs):
         if os.path.exists(out_dir):
             self.out_dir = out_dir
         else:
@@ -204,7 +204,12 @@ class ForgeClient:
         self.img2img_dir = os.path.join(self.out_dir, "img2img")
         self.base_url = base_url
         if auth:
-            self.httpx_args = {"auth": auth}
+            if {"username", "password"} <= auth.keys():
+                self.httpx_args = {
+                    "auth": BasicAuth(
+                        username=auth["username"], password=auth["password"]
+                    )
+                }
         else:
             self.httpx_args = {}
 
@@ -498,7 +503,11 @@ class ForgeClient:
 
     async def task_progress(self, id_task=None):
         live_previews_enable = self.options.live_previews_enable
-        self.options.live_previews_image_format
+        refresh_period = (
+            self.options.live_preview_refresh_period / 1000
+            if self.options.live_preview_refresh_period > 0
+            else 1
+        )
         progress_request = WebuiProgressRequest(
             id_task=id_task, live_preview=live_previews_enable
         )
@@ -511,11 +520,6 @@ class ForgeClient:
             progress: dict = json.loads(response.content)
             if (not progress["active"]) and (not progress["queued"]):
                 break
-            # if not (
-            #     bool(live_previews_enable) ^ bool(progress["id_live_preview"] >= 0)
-            # ):
-            #     break
-
             if (
                 progress["active"]
                 and live_previews_enable
@@ -525,7 +529,6 @@ class ForgeClient:
                     last_live_preview_id = progress["id_live_preview"]
                     live_preview = progress["live_preview"].split(",")
                     del progress["live_preview"]
-                    pprint.pprint(progress)
                     if len(live_preview) > 1:
                         live_preview = [
                             f'{id_task}-{progress["id_live_preview"]}.{self.options.live_previews_image_format}',
@@ -536,12 +539,12 @@ class ForgeClient:
                 else:
                     live_preview = None
             else:
-                pprint.pprint(progress)
                 live_preview = None
 
             progress_current = self.progress_get()
             pprint.pprint(progress_current.progress)
             pprint.pprint(progress_current.state)
+            pprint.pprint(self.options.live_preview_refresh_period)
             if progress["completed"]:
                 yield (1.0, live_preview, progress["textinfo"])
                 break
@@ -551,7 +554,8 @@ class ForgeClient:
                     yield (0.0, None, progress["textinfo"])
                 elif progress["progress"] > 0:
                     yield (progress["progress"], live_preview, progress["textinfo"])
-            await asyncio.sleep(1)
+
+            await asyncio.sleep(refresh_period)
 
     def get_memory(self):
         meminfo = self.memory_get()
@@ -602,8 +606,31 @@ class ForgeClient:
             result = await self.options_post(body=option_payload)
             return result.status_code
 
+    def txt2img_info(self):
+        payload = [
+            "sampler_name",
+            "scheduler",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+        ]
+        if self.options.forge_preset in ["flux", "all"]:
+            payload.insert(5, "distilled_cfg_scale")
+        return payload
+
+    def img2img_info(self):
+        payload = [
+            "sampler_name",
+            "steps",
+            "width",
+            "height",
+            "cfg_scale",
+            "denoising_strength",
+        ]
+        return payload
+
     def txt2img_settings(self):
-        options = self.options_get()
         payload = [
             "sampler_name",
             "scheduler",
@@ -615,12 +642,11 @@ class ForgeClient:
             "batch_size",
             "seed",
         ]
-        if options.forge_preset in ["flux", "all"]:
+        if self.options.forge_preset in ["flux", "all"]:
             payload.insert(5, "distilled_cfg_scale")
         return payload
 
     def img2img_settings(self):
-        options = self.options_get()
         inpaint = [
             "mask_blur",
             "inpaint_full_res",
@@ -642,7 +668,7 @@ class ForgeClient:
             "denoising_strength",
             "seed",
         ]
-        if options.forge_preset in ["flux", "all"]:
+        if self.options.forge_preset in ["flux", "all"]:
             payload.insert(5, "distilled_cfg_scale")
         return payload
 
@@ -724,6 +750,7 @@ class ForgeClient:
                 sampler_name="Euler a",
                 scheduler="Automatic",
                 steps=20,
+                denoising_strength=0.75,
             )
         elif preset == "xl":
             self.txt2img_payload = WebuiTxt2Img(
@@ -742,6 +769,7 @@ class ForgeClient:
                 sampler_name="DPM++ 2M SDE",
                 scheduler="Karras",
                 steps=20,
+                denoising_strength=0.75,
             )
         elif preset == "flux":
             self.txt2img_payload = WebuiTxt2Img(
@@ -760,6 +788,7 @@ class ForgeClient:
                 sampler_name="Euler",
                 scheduler="Simple",
                 steps=20,
+                denoising_strength=0.75,
             )
         elif preset == "all":
             self.txt2img_payload = WebuiTxt2Img(
@@ -772,4 +801,5 @@ class ForgeClient:
                 sampler_name="DPM++ 2M",
                 scheduler="Automatic",
                 steps=20,
+                denoising_strength=0.75,
             )
