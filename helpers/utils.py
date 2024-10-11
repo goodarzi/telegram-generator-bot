@@ -1,11 +1,19 @@
-import sys
+import os
 import time
 import math
 from datetime import datetime
 from ruamel.yaml import YAML
 
 
-def load_config(config_file):
+dir_path = os.path.dirname(os.path.realpath(__file__))
+dir_base = os.path.dirname(dir_path)
+
+
+def load_config(config_file=None):
+    if not config_file:
+        config_file = os.path.join(dir_base, "config.yaml")
+    if not os.path.exists(config_file):
+        return None
     """Load user config"""
     yaml = YAML()
     with open(config_file, encoding="utf-8") as f:

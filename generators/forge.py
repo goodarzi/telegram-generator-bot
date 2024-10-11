@@ -1,5 +1,4 @@
 import os
-import time
 import logging
 import asyncio
 import pprint
@@ -227,6 +226,10 @@ class ForgeClient:
             self.img2img_payload = WebuiImg2Img()
             self.txt2img_payload = WebuiTxt2Img()
             self.set_forge_preset()
+
+    @property
+    def options(self) -> Options:
+        return self.options_get()
 
     @staticmethod
     def encode_file_to_base64(path):
@@ -494,8 +497,13 @@ class ForgeClient:
         return json.loads(progress_response.content)
 
     async def task_progress(self, id_task=None):
-        progress_request = WebuiProgressRequest(id_task=id_task, live_preview=True)
+        live_previews_enable = self.options.live_previews_enable
+        self.options.live_previews_image_format
+        progress_request = WebuiProgressRequest(
+            id_task=id_task, live_preview=live_previews_enable
+        )
         last_progress = 0.0
+        last_live_preview_id = None
         last_live_preview = None
         while True:
             # progress = await self.progress_current(progress_request)
@@ -503,16 +511,25 @@ class ForgeClient:
             progress: dict = json.loads(response.content)
             if (not progress["active"]) and (not progress["queued"]):
                 break
-            if progress["live_preview"]:
-                if progress["live_preview"] != last_live_preview:
-                    last_live_preview = progress["live_preview"]
+            # if not (
+            #     bool(live_previews_enable) ^ bool(progress["id_live_preview"] >= 0)
+            # ):
+            #     break
+
+            if (
+                progress["active"]
+                and live_previews_enable
+                and (progress["id_live_preview"] > -1)
+            ):
+                if progress["id_live_preview"] != last_live_preview_id:
+                    last_live_preview_id = progress["id_live_preview"]
                     live_preview = progress["live_preview"].split(",")
                     del progress["live_preview"]
                     pprint.pprint(progress)
                     if len(live_preview) > 1:
                         live_preview = [
-                            f'{id_task}-{progress["id_live_preview"]}',
-                            live_preview[1],
+                            f'{id_task}-{progress["id_live_preview"]}.{self.options.live_previews_image_format}',
+                            base64.b64decode(live_preview[1]),
                         ]
                     else:
                         live_preview = None
@@ -526,13 +543,13 @@ class ForgeClient:
             pprint.pprint(progress_current.progress)
             pprint.pprint(progress_current.state)
             if progress["completed"]:
-                yield (1.0, None, progress["textinfo"])
+                yield (1.0, live_preview, progress["textinfo"])
                 break
             elif progress["progress"] != last_progress:
                 last_progress = progress["progress"]
                 if progress["queued"]:
                     yield (0.0, None, progress["textinfo"])
-                else:
+                elif progress["progress"] > 0:
                     yield (progress["progress"], live_preview, progress["textinfo"])
             await asyncio.sleep(1)
 
