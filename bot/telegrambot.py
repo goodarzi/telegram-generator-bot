@@ -153,6 +153,13 @@ class TelegramBot(TelegramClient):
 
     @staticmethod
     def button_inline_list(array_list: list):
+        if len(array_list) > 98:
+            result = []
+            for i in range(0, 96, 2):
+                result.append(
+                    [Button.inline(array_list[i]), Button.inline(array_list[i + 1])]
+                )
+            return result
         return [[Button.inline(i)] for i in array_list]
 
     @staticmethod

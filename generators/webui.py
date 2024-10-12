@@ -12,7 +12,7 @@ from .stable_diffusion_webui_client.client import Client as WebuiBaseClient
 from .stable_diffusion_webui_client.client import (
     AuthenticatedClient as WebuiAuthenticatedBaseClient,
 )
-from .stable_diffusion_webui_forge_client.types import Response, HTTPStatus
+from .stable_diffusion_webui_forge_client.types import Response, Unset
 
 
 from .stable_diffusion_webui_client.api.default import field_lambda_internal_ping_get
@@ -603,13 +603,7 @@ class WebuiClient:
             return result.status_code
 
     def txt2img_info(self):
-        payload = [
-            "sampler_name",
-            "steps",
-            "width",
-            "height",
-            "cfg_scale",
-        ]
+        payload = ["sampler_name", "steps", "width", "height", "cfg_scale", "styles"]
         return payload
 
     def img2img_info(self):
@@ -620,6 +614,7 @@ class WebuiClient:
             "height",
             "cfg_scale",
             "denoising_strength",
+            "styles",
         ]
         return payload
 
@@ -633,6 +628,7 @@ class WebuiClient:
             "n_iter",
             "batch_size",
             "seed",
+            "styles",
         ]
         return payload
 
@@ -656,6 +652,7 @@ class WebuiClient:
             "batch_size",
             "denoising_strength",
             "seed",
+            "styles",
         ]
         return payload
 
@@ -666,6 +663,7 @@ class WebuiClient:
             cfg_scale=5.0,
             sampler_name="DPM++ 2M SDE Karras",
             steps=30,
+            styles=[],
         )
         self.img2img_payload = WebuiImg2Img(
             height=1152,
@@ -674,4 +672,5 @@ class WebuiClient:
             sampler_name="DPM++ 2M SDE Karras",
             steps=30,
             denoising_strength=0.75,
+            styles=[],
         )

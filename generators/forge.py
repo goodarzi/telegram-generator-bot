@@ -164,11 +164,12 @@ from .stable_diffusion_webui_forge_client.models import (
 from .stable_diffusion_webui_forge_client.models import (
     StableDiffusionProcessingTxt2ImgAlwaysonScripts as WebuiTxt2ImgAlwaysonScripts,
 )
-
 from .stable_diffusion_webui_forge_client.models import (
     ProgressRequest as WebuiProgressRequest,
 )
-
+from .stable_diffusion_webui_forge_client.models import (
+    StableDiffusionProcessingImg2ImgOverrideSettingsType0,
+)
 import os
 import base64
 from collections.abc import AsyncIterator
@@ -228,9 +229,17 @@ class ForgeClient:
                 self.logger.setLevel(kwargs["log_level"])
 
             self.tg_msg_id_input_files = {}
-            self.img2img_payload = WebuiImg2Img()
-            self.txt2img_payload = WebuiTxt2Img()
-            self.set_forge_preset()
+            self.img2img_payload = WebuiImg2Img(
+                styles=[], sampler_name="", scheduler=""
+            )
+            self.txt2img_payload = WebuiTxt2Img(
+                styles=[], sampler_name="", scheduler=""
+            )
+
+            self.preset_list = ("sd", "xl", "flux", "all", "lightning", "hyper")
+            self.preset = "lightning"
+
+            self.set_preset(self.preset)
 
     @property
     def options(self) -> Options:
@@ -518,8 +527,8 @@ class ForgeClient:
             # progress = await self.progress_current(progress_request)
             response = await self.progress_post(progress_request)
             progress: dict = json.loads(response.content)
-            if (not progress["active"]) and (not progress["queued"]):
-                break
+            # if (not progress["active"]) and (not progress["queued"]):
+            #     break
             if (
                 progress["active"]
                 and live_previews_enable
@@ -611,9 +620,11 @@ class ForgeClient:
             "sampler_name",
             "scheduler",
             "steps",
+            "cfg_scale",
             "width",
             "height",
-            "cfg_scale",
+            "seed",
+            "styles",
         ]
         if self.options.forge_preset in ["flux", "all"]:
             payload.insert(5, "distilled_cfg_scale")
@@ -627,6 +638,7 @@ class ForgeClient:
             "height",
             "cfg_scale",
             "denoising_strength",
+            "styles",
         ]
         return payload
 
@@ -641,6 +653,7 @@ class ForgeClient:
             "n_iter",
             "batch_size",
             "seed",
+            "styles",
         ]
         if self.options.forge_preset in ["flux", "all"]:
             payload.insert(5, "distilled_cfg_scale")
@@ -667,6 +680,7 @@ class ForgeClient:
             "batch_size",
             "denoising_strength",
             "seed",
+            "styles",
         ]
         if self.options.forge_preset in ["flux", "all"]:
             payload.insert(5, "distilled_cfg_scale")
@@ -692,6 +706,26 @@ class ForgeClient:
                 return "ok"
         else:
             return [i.model_name for i in avail_modules]
+
+    def styles(self, style=None, current=False):
+        avail_styles = self.prompt_styles_get()
+        selected_styles: list = (
+            []
+            if isinstance(self.txt2img_payload.styles, Unset)
+            else self.txt2img_payload.styles
+        )
+
+        if current:
+            return [s for s in selected_styles]
+        elif style:
+            if style in selected_styles:
+                selected_styles.remove(style)
+            else:
+                selected_styles.append(style)
+            self.txt2img_payload.styles = selected_styles
+            return "ok"
+        else:
+            return [i.name for i in avail_styles]
 
     def set_options(self, new_options: dict):
         options = self.options_get()
@@ -726,80 +760,107 @@ class ForgeClient:
         value_intype = attr_type(v)
         self.txt2img_payload = value_intype
 
-    def set_forge_preset(self, preset: str = None):
-        if not preset:
-            options = self.options_get()
-            new_options = {"CLIP_stop_at_last_layers": 1}
-            preset = options.forge_preset
-        else:
-            new_options = {"forge_preset": preset, "CLIP_stop_at_last_layers": 1}
-        self.set_options(new_options)
+    def set_preset(self, preset: str):
+        print(f"{self.id=}")
+        for inst in ForgeClient.instances:
+            if hasattr(inst, "chat_id"):
+                print(f"{inst.chat_id=}")
+
+        new_options = {"CLIP_stop_at_last_layers": 1}
 
         if preset == "sd":
-            self.txt2img_payload = WebuiTxt2Img(
-                height=640,
-                width=512,
-                cfg_scale=7.0,
-                sampler_name="Euler a",
-                scheduler="Automatic",
-                steps=20,
-            )
-            self.img2img_payload = WebuiImg2Img(
-                resize_mode=1,
-                cfg_scale=7.0,
-                sampler_name="Euler a",
-                scheduler="Automatic",
-                steps=20,
-                denoising_strength=0.75,
-            )
+            self.txt2img_payload.height = 640
+            self.txt2img_payload.width = 512
+            self.txt2img_payload.cfg_scale = 7.0
+            self.txt2img_payload.sampler_name = "Euler a"
+            self.txt2img_payload.scheduler = "Automatic"
+            self.txt2img_payload.steps = 20
+
+            self.img2img_payload.resize_mode = 1
+            self.img2img_payload.cfg_scale = 7.0
+            self.img2img_payload.sampler_name = "Euler a"
+            self.img2img_payload.scheduler = "Automatic"
+            self.img2img_payload.steps = 20
+            self.preset = "sd"
+            new_options["forge_preset"] = "sd"
+
         elif preset == "xl":
-            self.txt2img_payload = WebuiTxt2Img(
-                height=1152,
-                width=896,
-                cfg_scale=5.0,
-                sampler_name="DPM++ 2M SDE",
-                scheduler="Karras",
-                steps=20,
-            )
-            self.img2img_payload = WebuiImg2Img(
-                resize_mode=1,
-                height=1152,
-                width=896,
-                cfg_scale=5.0,
-                sampler_name="DPM++ 2M SDE",
-                scheduler="Karras",
-                steps=20,
-                denoising_strength=0.75,
-            )
+            self.txt2img_payload.height = 1152
+            self.txt2img_payload.width = 896
+            self.txt2img_payload.cfg_scale = 5.0
+            self.txt2img_payload.sampler_name = "DPM++ 2M SDE"
+            self.txt2img_payload.scheduler = "Karras"
+            self.txt2img_payload.steps = 20
+
+            self.img2img_payload.resize_mode = 1
+            self.img2img_payload.height = 1152
+            self.img2img_payload.width = 896
+            self.img2img_payload.cfg_scale = 5.0
+            self.img2img_payload.sampler_name = "DPM++ 2M SDE"
+            self.img2img_payload.scheduler = "Karras"
+            self.img2img_payload.steps = 20
+            self.preset = "xl"
+            new_options["forge_preset"] = "xl"
+
         elif preset == "flux":
-            self.txt2img_payload = WebuiTxt2Img(
-                height=1152,
-                width=896,
-                cfg_scale=1.0,
-                sampler_name="Euler",
-                scheduler="Simple",
-                steps=20,
-            )
-            self.img2img_payload = WebuiImg2Img(
-                resize_mode=1,
-                height=1152,
-                width=896,
-                cfg_scale=1.0,
-                sampler_name="Euler",
-                scheduler="Simple",
-                steps=20,
-                denoising_strength=0.75,
-            )
+            self.txt2img_payload.height = 1152
+            self.txt2img_payload.width = 896
+            self.txt2img_payload.cfg_scale = 1.0
+            self.txt2img_payload.sampler_name = "Euler"
+            self.txt2img_payload.scheduler = "Simple"
+            self.txt2img_payload.steps = 20
+
+            self.img2img_payload.resize_mode = 1
+            self.img2img_payload.height = 1152
+            self.img2img_payload.width = 896
+            self.img2img_payload.cfg_scale = 1.0
+            self.img2img_payload.sampler_name = "Euler"
+            self.img2img_payload.scheduler = "Simple"
+            self.img2img_payload.steps = 20
+            self.preset = "flux"
+            new_options["forge_preset"] = "flux"
         elif preset == "all":
-            self.txt2img_payload = WebuiTxt2Img(
-                sampler_name="DPM++ 2M",
-                scheduler="Automatic",
-                steps=20,
-            )
-            self.img2img_payload = WebuiImg2Img(
-                resize_mode=1.0,
-                sampler_name="DPM++ 2M",
-                scheduler="Automatic",
-                steps=20,
-                denoising_strength=0.75,
-            )
+            self.txt2img_payload.sampler_name = "DPM++ 2M"
+            self.txt2img_payload.scheduler = "Automatic"
+            self.txt2img_payload.steps = 20
+
+            self.img2img_payload.resize_mode = 1.0
+            self.img2img_payload.sampler_name = "DPM++ 2M"
+            self.img2img_payload.scheduler = "Automatic"
+            self.img2img_payload.steps = 20
+            self.preset = "all"
+            new_options["forge_preset"] = "all"
+        elif preset == "lightning":
+            self.txt2img_payload.height = 1152
+            self.txt2img_payload.width = 896
+            self.txt2img_payload.cfg_scale = 1.0
+            self.txt2img_payload.sampler_name = "DPM++ SDE"
+            self.txt2img_payload.scheduler = "Karras"
+            self.txt2img_payload.steps = 5
+
+            self.img2img_payload.height = 1152
+            self.img2img_payload.width = 896
+            self.img2img_payload.resize_mode = 1.0
+            self.img2img_payload.sampler_name = "DPM++ SDE"
+            self.img2img_payload.scheduler = "Karras"
+            self.img2img_payload.steps = 5
+            self.preset = "lightning"
+            new_options["forge_preset"] = "xl"
+        elif preset == "hyper":
+            self.txt2img_payload.height = 1216
+            self.txt2img_payload.width = 832
+            self.txt2img_payload.cfg_scale = 1.0
+            self.txt2img_payload.sampler_name = "DPM++ SDE"
+            self.txt2img_payload.scheduler = "Karras"
+            self.txt2img_payload.steps = 6
+
+            self.img2img_payload.height = 1216
+            self.img2img_payload.width = 832
+            self.img2img_payload.resize_mode = 1.0
+            self.img2img_payload.sampler_name = "DPM++ SDE"
+            self.img2img_payload.scheduler = "Karras"
+            self.img2img_payload.steps = 5
+            self.preset = "hyper"
+            new_options["forge_preset"] = "xl"
+
+        self.set_options(new_options)

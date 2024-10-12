@@ -126,7 +126,11 @@ async def generate_txt2img(
         )
 
     info = json.loads(generate.result().info)
-    payload_info += f"`/txt2img seed {info['all_seeds']}`\n"
+    payload_info += f"{info['sd_model_name']}"
+    payload_info += f"seeds: `{info['all_seeds']}`\n"
+    payload_info += f"prompts: `{info['all_prompts']}`\n"
+    if len(info["all_negative_prompts"]) > 0:
+        payload_info += f"negatives: `{info['all_negative_prompts']}`\n"
 
     upload_files = [
         await event.client.upload_file(
@@ -216,7 +220,7 @@ async def generate_img2img(event, message, text: str = None):
 
     for k in generator_client.img2img_info():
         payload_info += (
-            f"`/img2img {k} {str(getattr(generator_client.txt2img_payload, k))}` \n"
+            f"`/img2img {k} {str(getattr(generator_client.img2img_payload, k))}` \n"
         )
 
     async with asyncio.TaskGroup() as tg:
@@ -226,12 +230,14 @@ async def generate_img2img(event, message, text: str = None):
         )
 
     info = json.loads(generate.result().info)
-    payload_info += f"`/txt2img seed {info['all_seeds']}`\n"
-
+    payload_info += f"seeds: `{info['all_seeds']}`\n"
+    payload_info += f"prompts: `{info['all_prompts']}`\n"
+    if len(info["all_negative_prompts"]) > 0:
+        payload_info += f"negatives: `{info['all_negative_prompts']}`\n"
     upload_files = [
         await event.client.upload_file(
             base64.b64decode(image),
-            file_name=f"txt2img-{utils.timestamp()}.png",
+            file_name=f"img2img-{utils.timestamp()}.png",
         )
         for image in generate.result().images
     ]
@@ -291,7 +297,7 @@ async def clear_buttons(event: NewMessage.Event):
 async def menu(event, generator_client=None):
     text = f"**Menu:**\n"
     buttons = [
-        [Button.inline("Stable Diffusion checkpoints")],
+        [Button.inline("Stable Diffusion model")],
         [Button.inline("txt2img"), Button.inline("img2img")],
         [Button.inline("Extras"), Button.inline("PNG Info"), Button.inline("lora")],
         [Button.inline("Memory Info"), Button.inline("Text Modes")],
@@ -301,17 +307,16 @@ async def menu(event, generator_client=None):
         if not generator_client:
             generator_client = GeneratorClient(event.chat_id).image
 
-        options = generator_client.options_get()
     except Exception as e:
         if isinstance(event, NewMessage.Event):
             await event.respond(message=str(e), buttons=buttons)
         elif isinstance(event, CallbackQuery.Event):
             await event.edit(text=str(e), buttons=buttons)
         return
-    text += f"**├─Checkpoint:** {options.sd_model_checkpoint}\n"
+    text += f"├─**Checkpoint:** {generator_client.options.sd_model_checkpoint}\n"
 
     if isinstance(generator_client, ForgeClient):
-        text += f"**├─Forge preset:** {options.forge_preset}\n"
+        text += f"└─**Preset:** {generator_client.preset}\n"
         buttons.insert(0, [Button.inline("forge")])
     if isinstance(event, NewMessage.Event):
         await event.respond(message=text, buttons=buttons)
@@ -319,61 +324,69 @@ async def menu(event, generator_client=None):
         await event.edit(text=text, buttons=buttons)
 
 
-async def menu_forge(
+def preset_buttons():
+    return [
+        [
+            Button.inline("sd"),
+            Button.inline("xl"),
+            Button.inline("flux"),
+            Button.inline("all"),
+        ],
+        [
+            Button.inline("lightning"),
+            Button.inline("hyper"),
+        ],
+    ]
+
+
+async def menu_preset(
     event, generator_client: Union[WebuiClient, ForgeClient], data_str: str = None
 ):
     if data_str:
-        if data_str in ["sd", "xl", "flux", "all"]:
+        if data_str in ["sd", "xl", "flux", "all", "lightning", "hyper"]:
             try:
-                generator_client.set_forge_preset(data_str)
+                generator_client.set_preset(data_str)
                 await event.answer(data_str, cache_time=2)
-                await menu_forge(event, generator_client)
+                await menu_preset(event, generator_client)
             except Exception as e:
                 await event.answer(str(e), cache_time=2)
     else:
-        options = generator_client.options_get()
+        options = generator_client.options
         forge_async_loading = options.forge_async_loading
         forge_pin_shared_memory = options.forge_pin_shared_memory
         forge_inference_memory = options.forge_inference_memory
         forge_unet_storage_dtype = options.forge_unet_storage_dtype
         forge_additional_modules = generator_client.sd_modules(current=True)
         clip_stop_at_last_layers = options.clip_stop_at_last_layers
-        text = f"Menu/forge:\n"
-        text += f"VAE / Text Encoder:\n"
-        for i in forge_additional_modules:
-            text += f"  - {i}\n"
+        text = f"**Menu/Preset:**\n"
+        text += f"├─**Preset:** {generator_client.preset}\n"
+        text += f"└─**VAE & Text Encoder:**\n"
+        if forge_additional_modules:
+            for i in forge_additional_modules[:-1]:
+                text += f"  ├─**{i}**\n"
+            text += f"  └─**{forge_additional_modules[-1]}**\n"
         buttons = [
-            [
-                Button.inline("sd"),
-                Button.inline("xl"),
-                Button.inline("flux"),
-                Button.inline("all"),
-            ]
+            [Button.inline(f"{forge_async_loading=}")],
+            [Button.inline(f"{forge_pin_shared_memory=}")],
+            [Button.inline(f"{forge_unet_storage_dtype=}")],
+            [Button.inline(f"VAE & Text Encoder")],
         ]
+        for i in preset_buttons():
+            buttons.insert(0, i)
         if options.forge_preset == "flux":
-            text += f"`/options forge_inference_memory `: {forge_inference_memory}\n"
-            buttons.append([Button.inline(f"{forge_async_loading=}")])
-            buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
-            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
-            buttons.append([Button.inline(f"forge_additional_modules=")])
+            text += f"`/options forge_inference_memory {forge_inference_memory}`\n"
         elif options.forge_preset == "xl":
-            text += f"`/options forge_inference_memory `: {forge_inference_memory}\n"
-            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
-            buttons.append([Button.inline(f"forge_additional_modules=")])
+            text += f"`/options forge_inference_memory {forge_inference_memory}`\n"
+            buttons.remove([Button.inline(f"{forge_async_loading=}")])
+            buttons.remove([Button.inline(f"{forge_pin_shared_memory=}")])
         elif options.forge_preset == "sd":
-            text += (
-                f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}\n"
-            )
-            buttons.append([Button.inline(f"forge_additional_modules=")])
+            text += f"`/options CLIP_stop_at_last_layers {clip_stop_at_last_layers}`\n"
+            buttons.remove([Button.inline(f"{forge_async_loading=}")])
+            buttons.remove([Button.inline(f"{forge_pin_shared_memory=}")])
+            buttons.remove([Button.inline(f"{forge_unet_storage_dtype=}")])
         elif options.forge_preset == "all":
-            text += (
-                f"`/options CLIP_stop_at_last_layers `: {clip_stop_at_last_layers}\n"
-            )
-            text += f"`/options forge_inference_memory `: {forge_inference_memory}"
-            buttons.append([Button.inline(f"{forge_async_loading=}")])
-            buttons.append([Button.inline(f"{forge_pin_shared_memory=}")])
-            buttons.append([Button.inline(f"{forge_unet_storage_dtype=}")])
-            buttons.append([Button.inline(f"forge_additional_modules=")])
+            text += f"`/options CLIP_stop_at_last_layers {clip_stop_at_last_layers}`\n"
+            text += f"`/options forge_inference_memory {forge_inference_memory}`\n"
 
         buttons.append([Button.inline("Back")])
         await event.edit(text=text, buttons=buttons)
@@ -385,10 +398,10 @@ async def menu_forge_async_loading(event, generator_client, data_str: str = None
         try:
             generator_client.options_post(body)
             await event.answer(data_str, cache_time=2)
-            return await menu_forge(event, generator_client)
+            return await menu_preset(event, generator_client)
         except Exception as e:
             await event.answer(str(e), cache_time=2)
-    text = f"**Menu/forge/forge_async_loading:**\n"
+    text = f"**Menu/Preset/forge_async_loading:**\n"
     buttons = [[Button.inline("Queue"), Button.inline("Async")]]
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -400,10 +413,10 @@ async def menu_forge_pin_shared_memory(event, generator_client, data_str: str = 
         try:
             generator_client.options_post(body)
             await event.answer(data_str, cache_time=2)
-            return await menu_forge(event, generator_client)
+            return await menu_preset(event, generator_client)
         except Exception as e:
             await event.answer(str(e), cache_time=2)
-    text = f"**Menu/forge/forge_pin_shared_memory:**\n"
+    text = f"**Menu/Preset/forge_pin_shared_memory:**\n"
     buttons = [[Button.inline("CPU"), Button.inline("Shared")]]
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -415,10 +428,10 @@ async def menu_forge_unet_storage_dtype(event, generator_client, data_str: str =
         try:
             generator_client.options_post(body)
             await event.answer(data_str, cache_time=2)
-            return await menu_forge(event, generator_client)
+            return await menu_preset(event, generator_client)
         except Exception as e:
             await event.answer(str(e), cache_time=2)
-    text = f"**Menu/forge/forge_unet_storage_dtype:**\n"
+    text = f"**Menu/Preset/forge_unet_storage_dtype:**\n"
     buttons = [[Button.inline("Automatic"), Button.inline("Automatic (fp16 LoRA)")]]
     buttons.append([Button.inline("bnb-nf4"), Button.inline("bnb-nf4 (fp16 LoRA)")])
     buttons.append(
@@ -440,11 +453,13 @@ async def menu_forge_additional_modules(event, generator_client, data_str: str =
             return await menu_forge_additional_modules(event, generator_client)
         except Exception as e:
             await event.answer(str(e), cache_time=2)
-    text = f"**Menu/forge/forge_additional_modules:**\n"
+    text = f"**Menu/Preset/VAE & Text Encoder:**\n"
     forge_additional_modules = generator_client.sd_modules(current=True)
-    text += f"VAE / Text Encoder:\n"
-    for i in forge_additional_modules:
-        text += f"  - {i}\n"
+    text += f"└─**VAE & Text Encoder:**\n"
+    if forge_additional_modules:
+        for i in forge_additional_modules[:-1]:
+            text += f"  ├─**{i}**\n"
+        text += f"  └─**{forge_additional_modules[-1]}**\n"
     buttons = TelegramBot.button_inline_list(generator_client.sd_modules())
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
@@ -462,7 +477,7 @@ async def options(event: NewMessage.Event):
         await event.respond(message=str(e))
 
 
-async def menu_stable_diffusion_checkpoint(
+async def menu_stable_diffusion_model(
     event, generator_client=None, data_str: str = None
 ):
     if not generator_client:
@@ -471,21 +486,22 @@ async def menu_stable_diffusion_checkpoint(
         if data_str == "Refresh":
             await generator_client.refresh_checkpoints_post()
             await event.answer(data_str, cache_time=2)
-            await menu_stable_diffusion_checkpoint(event, generator_client)
+            await menu_stable_diffusion_model(event, generator_client)
         elif data_str == "Reload":
             await generator_client.reload_checkpoint_post()
             await event.answer(data_str, cache_time=2)
-            await menu_stable_diffusion_checkpoint(event, generator_client)
+            await menu_stable_diffusion_model(event, generator_client)
         elif data_str == "Unload":
             await generator_client.unload_checkpoint_post()
             await event.answer(data_str, cache_time=2)
-            await menu_stable_diffusion_checkpoint(event, generator_client)
+            await menu_stable_diffusion_model(event, generator_client)
         else:
             result: HTTPStatus = generator_client.model(data_str)
             await event.answer(str(result), cache_time=2)
             await menu(event, generator_client)
     else:
-        text = f"Menu/Stable Diffusion checkpoints:\n"
+        text = f"**Menu/Stable Diffusion model:**\n"
+        text += f"├─**{generator_client.options.sd_model_checkpoint}**"
         result = generator_client.model()
         buttons = TelegramBot.button_inline_list(result)
         buttons.append(
@@ -508,15 +524,18 @@ async def menu_txt2img(event, generator_client=None):
     if not generator_client:
         generator_client = GeneratorClient(event.chat_id).image
     for k in generator_client.txt2img_settings():
-        text += f"`/txt2img {k} `: {getattr(generator_client.txt2img_payload, k)} \n"
+        text += f"`/txt2img {k} {getattr(generator_client.txt2img_payload, k)}` \n"
     sampler_name = generator_client.txt2img_payload.sampler_name
     buttons = [
         [Button.inline(f"{sampler_name=}")],
+        [Button.inline(f"Styles")],
         [Button.inline("Back")],
     ]
+    for i in preset_buttons():
+        buttons.insert(2, i)
     if isinstance(generator_client, ForgeClient):
         scheduler = generator_client.txt2img_payload.scheduler
-        buttons.insert(1, [Button.inline(f"{scheduler=}")])
+        buttons[0].append(Button.inline(f"{scheduler=}"))
     if isinstance(event, CallbackQuery.Event):
         await event.edit(text=text, buttons=buttons)
     else:
@@ -553,12 +572,38 @@ async def menu_txt2img_scheduler(event, generator_client, data_str: str = None):
         await event.edit(text=text, buttons=buttons)
 
 
+async def menu_txt2img_styles(event, generator_client=None, data_str: str = None):
+    if not generator_client:
+        generator_client = GeneratorClient(event.chat_id).image
+    if data_str:
+        try:
+            generator_client.styles(data_str)
+            await event.answer(data_str, cache_time=2)
+            return await menu_txt2img_styles(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
+    text = f"**Menu/txt2img/styles:**\n"
+    text += f"└─**Selected styles:**\n"
+    styles = generator_client.styles(current=True)
+    if styles:
+        for i in styles[:-1]:
+            text += f"  ├─**{i}**\n"
+        text += f"  └─**{styles[-1]}**\n"
+    buttons = TelegramBot.button_inline_list(generator_client.styles())
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
 async def set_txt2img_payload(event: NewMessage.Event):
     generator_client = GeneratorClient(event.chat_id).image
     message: str = event.message.text
     option = message.split()
     try:
-        setattr(generator_client.txt2img_payload, option[1], option[2])
+        if len(option) < 2:
+            val = None
+        elif "[" in option[2]:
+            val = eval(option[2])
+        setattr(generator_client.txt2img_payload, option[1], val)
         print(type(generator_client.txt2img_payload.__getattribute__(option[1])))
     except (AttributeError, TypeError, ValueError) as e:
         await event.respond(message=str(e))
@@ -570,15 +615,18 @@ async def menu_img2img(event, generator_client=None):
     if not generator_client:
         generator_client = GeneratorClient(event.chat_id).image
     for k in generator_client.img2img_settings():
-        text += f"`/img2img {k} `: {getattr(generator_client.img2img_payload, k)} \n"
+        text += f"`/img2img {k} {getattr(generator_client.img2img_payload, k)}` \n"
     sampler_name = generator_client.img2img_payload.sampler_name
     buttons = [
         [Button.inline(f"{sampler_name=}")],
+        [Button.inline(f"Styles")],
         [Button.inline("Back")],
     ]
+    for i in preset_buttons():
+        buttons.insert(2, i)
     if isinstance(generator_client, ForgeClient):
         scheduler = generator_client.img2img_payload.scheduler
-        buttons.insert(1, [Button.inline(f"{scheduler=}")])
+        buttons[0].append(Button.inline(f"{scheduler=}"))
     if isinstance(event, CallbackQuery.Event):
         await event.edit(text=text, buttons=buttons)
     else:
@@ -620,12 +668,11 @@ async def set_img2img_payload(event: NewMessage.Event):
     message: str = event.message.text
     option = message.split()
     try:
-        utils.check_obj_attr_type(
-            generator_client.img2img_payload, option[1], option[2]
-        )
-        attr_type = type(getattr(generator_client.img2img_payload, option[1]))
-        value_intype = attr_type(option[2])
-        generator_client.img2img_payload.__setattr__(option[1], value_intype)
+        if len(option) < 2:
+            val = None
+        elif "[" in option[2]:
+            val = eval(option[2])
+        generator_client.img2img_payload.__setattr__(option[1], val)
     except (AttributeError, TypeError) as e:
         await event.respond(message=str(e))
 
@@ -668,10 +715,14 @@ async def menu_lora(event, generator_client):
 async def menu_memory_info(event, generator_client):
     text = f"**Menu/Memory Info:**\n"
     result = generator_client.get_memory()
-    text += "**├─RAM**\n"
-    text += f"│ ├─Free:{utils.format_byte(result['ram']['free'])} \tUsed:{utils.format_byte(result['ram']['used'])} \tTotal:{utils.format_byte(result['ram']['total'])}\n"
-    text += "**├─CUDA**\n"
-    text += f"│ ├─Free:{utils.format_byte(result['cuda']['free'])} \tUsed:{utils.format_byte(result['cuda']['used'])} \tTotal:{utils.format_byte(result['cuda']['total'])}\n"
+    text += f"├─RAM\n"
+    text += f"│ ├─Free:  **{utils.format_byte(result['ram']['free'])}**\n"
+    text += f"│ ├─Used:  **{utils.format_byte(result['ram']['used'])}**\n"
+    text += f"│ └─Total: **{utils.format_byte(result['ram']['total'])}**\n"
+    text += f"└─CUDA\n"
+    text += f"  ├─Free:  **{utils.format_byte(result['cuda']['free'])}**\n"
+    text += f"  ├─Used:  **{utils.format_byte(result['cuda']['used'])}**\n"
+    text += f"  └─Total: **{utils.format_byte(result['cuda']['total'])}**\n"
     buttons = []
     buttons.append([Button.inline("Back")])
     if isinstance(event, NewMessage.Event):
@@ -726,9 +777,9 @@ async def callback_query_handler(event: CallbackQuery.Event):
     generator_client = GeneratorClient(event.chat_id).image
     event_str = event.data.decode("utf-8")
     message = await event.get_message()
-    back_menu_pattern = re.compile("([\w\s]+)/[\w\s]+:")
+    back_menu_pattern = re.compile("([&\w\s]+)/[&\w\s]+:")
     back_menu = re.search(back_menu_pattern, message.text)
-    current_menu_pattern = re.compile("/?([\w\s]+):")
+    current_menu_pattern = re.compile("/?([&\w\s]+):")
     current_menu = re.search(current_menu_pattern, message.text)
     try:
         if event.data == b"Regen":
@@ -739,10 +790,10 @@ async def callback_query_handler(event: CallbackQuery.Event):
             await intrrupt(event, generator_client)
         elif event.data == b"Skip":
             await skip(event, generator_client)
-        elif event.data == b"Stable Diffusion checkpoints":
-            await menu_stable_diffusion_checkpoint(event, generator_client)
+        elif event.data == b"Stable Diffusion model":
+            await menu_stable_diffusion_model(event, generator_client)
         elif event.data == b"forge":
-            await menu_forge(event, generator_client)
+            await menu_preset(event, generator_client)
         elif event.data == b"txt2img":
             await menu_txt2img(event, generator_client)
         elif event.data == b"img2img":
@@ -755,42 +806,49 @@ async def callback_query_handler(event: CallbackQuery.Event):
             await menu_lora(event, generator_client)
         elif event.data == b"Memory Info":
             await menu_memory_info(event, generator_client)
+        elif event.data.startswith(b"forge_async_loading="):
+            await menu_forge_async_loading(event, generator_client)
+        elif event.data.startswith(b"forge_pin_shared_memory="):
+            await menu_forge_pin_shared_memory(event, generator_client)
+        elif event.data.startswith(b"forge_unet_storage_dtype="):
+            await menu_forge_unet_storage_dtype(event, generator_client)
+        elif event.data == b"VAE & Text Encoder":
+            await menu_forge_additional_modules(event, generator_client)
 
         # elif event.data == b"Text Modes":
         #     await menu_text_modes(event, generator_client)
 
         elif event.data == b"Back" and back_menu:
+            print(f"{back_menu[1]=}")
             if back_menu[1] == "Menu":
                 await menu(event, generator_client)
-            elif back_menu[1] == "forge":
-                await menu_forge(event, generator_client)
+            elif back_menu[1] == "Preset":
+                await menu_preset(event, generator_client)
             elif back_menu[1] == "txt2img":
                 await menu_txt2img(event, generator_client)
             elif back_menu[1] == "img2img":
                 await menu_img2img(event, generator_client)
         elif current_menu:
-            if current_menu[1] == "Stable Diffusion checkpoints":
-                await menu_stable_diffusion_checkpoint(
-                    event, generator_client, event_str
-                )
-            elif current_menu[1] == "forge":
-                if event.data.startswith(b"forge_async_loading="):
-                    await menu_forge_async_loading(event, generator_client)
-                elif event.data.startswith(b"forge_pin_shared_memory="):
-                    await menu_forge_pin_shared_memory(event, generator_client)
-                elif event.data.startswith(b"forge_unet_storage_dtype="):
-                    await menu_forge_unet_storage_dtype(event, generator_client)
-                elif event.data.startswith(b"forge_additional_modules="):
-                    await menu_forge_additional_modules(event, generator_client)
-                else:
-                    await menu_forge(event, generator_client, event_str)
+            print(f"{current_menu[1]=}")
+            if current_menu[1] == "Stable Diffusion model":
+                await menu_stable_diffusion_model(event, generator_client, event_str)
+            elif current_menu[1] == "Preset":
+                await menu_preset(event, generator_client, event_str)
             elif current_menu[1] == "txt2img":
-                if event.data.startswith(b"sampler_name="):
+                if event_str in generator_client.preset_list:
+                    generator_client.set_preset(event_str)
+                    await menu_txt2img(event, generator_client)
+                elif event.data.startswith(b"sampler_name="):
                     await menu_txt2img_sampler_name(event, generator_client)
                 elif event.data.startswith(b"scheduler="):
                     await menu_txt2img_scheduler(event, generator_client)
+                elif event.data.startswith(b"Styles"):
+                    await menu_txt2img_styles(event, generator_client)
             elif current_menu[1] == "img2img":
-                if event.data.startswith(b"sampler_name="):
+                if event_str in generator_client.preset_list:
+                    generator_client.set_preset(event_str)
+                    await menu_txt2img(event, generator_client)
+                elif event.data.startswith(b"sampler_name="):
                     await menu_img2img_sampler_name(event, generator_client)
                 elif event.data.startswith(b"scheduler="):
                     await menu_img2img_scheduler(event, generator_client)
@@ -800,7 +858,7 @@ async def callback_query_handler(event: CallbackQuery.Event):
                 await menu_forge_pin_shared_memory(event, generator_client, event_str)
             elif current_menu[1] == "forge_unet_storage_dtype":
                 await menu_forge_unet_storage_dtype(event, generator_client, event_str)
-            elif current_menu[1] == "forge_additional_modules":
+            elif current_menu[1] == "VAE & Text Encoder":
                 await menu_forge_additional_modules(event, generator_client, event_str)
             elif current_menu[1] == "sampler_name" and back_menu[1] == "txt2img":
                 await menu_txt2img_sampler_name(event, generator_client, event_str)
@@ -808,12 +866,12 @@ async def callback_query_handler(event: CallbackQuery.Event):
                 await menu_img2img_sampler_name(event, generator_client, event_str)
             elif current_menu[1] == "scheduler" and back_menu[1] == "txt2img":
                 await menu_txt2img_scheduler(event, generator_client, event_str)
+            elif current_menu[1] == "styles" and back_menu[1] == "txt2img":
+                await menu_txt2img_styles(event, generator_client, event_str)
             elif current_menu[1] == "scheduler" and back_menu[1] == "img2img":
                 await menu_img2img_scheduler(event, generator_client, event_str)
-            elif current_menu[1] == "Stable Diffusion checkpoints":
-                await menu_stable_diffusion_checkpoint(
-                    event, generator_client, event_str
-                )
+            elif current_menu[1] == "Stable Diffusion model":
+                await menu_stable_diffusion_model(event, generator_client, event_str)
 
     except Exception as e:
         await event.answer(str(e))
@@ -853,6 +911,11 @@ async def main():
     telegram_client.add_event_handler(
         callback=menu_img2img,
         event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/img2img$"),
+    )
+
+    telegram_client.add_event_handler(
+        callback=menu_stable_diffusion_model,
+        event=NewMessage(chats=allow_chats, incoming=True, pattern="(?i)/sd_model$"),
     )
 
     telegram_client.add_event_handler(
