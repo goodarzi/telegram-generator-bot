@@ -99,25 +99,24 @@ async def generate_txt2img(
     if not message:
         message = event.message
     if text:
-        payload.prompt, payload.negative_prompt = GeneratorClient.txt2prompt(text)
-    elif event.pattern_match:
-        payload.prompt = event.pattern_match[1]
+        payload.prompt = get_cmd_from_message(text, "/p")
+        payload.negative_prompt = get_cmd_from_message(text, "/n")
     else:
-        payload.prompt, payload.negative_prompt = GeneratorClient.txt2prompt(
-            message.text
-        )
+        payload.prompt = get_cmd_from_message(message.text, "/p")
+        payload.negative_prompt = get_cmd_from_message(message.text, "/n")
 
     payload_info = (
         f"`/p {payload.prompt}`\n"
         if not payload.negative_prompt
-        else f"`/p {payload.prompt}` `/n {payload.negative_prompt}`\n"
+        else f"`/p {payload.prompt} /n {payload.negative_prompt}`\n"
     )
     payload_info = f"**txt2img:** \n" + payload_info
 
+    tmp_info = ""
     for k in generator_client.txt2img_info():
-        payload_info += (
-            f"`/txt2img {k} {getattr(generator_client.txt2img_payload, k)}` \n"
-        )
+        tmp_info += f"{k} {getattr(generator_client.txt2img_payload, k)}, "
+
+    payload_info += f"/txt2img\n{tmp_info}\n"
 
     async with asyncio.TaskGroup() as tg:
         generate = tg.create_task(generator_client.txt2img(payload))
@@ -126,7 +125,7 @@ async def generate_txt2img(
         )
 
     info = json.loads(generate.result().info)
-    payload_info += f"{info['sd_model_name']}"
+    payload_info += f"**{info['sd_model_name']}**\n"
     payload_info += f"seeds: `{info['all_seeds']}`\n"
     payload_info += f"prompts: `{info['all_prompts']}`\n"
     if len(info["all_negative_prompts"]) > 0:
@@ -200,8 +199,9 @@ async def generate_img2img(event, message, text: str = None):
         return
 
     img = await event.client.download_image(message)
-    print(img)
-    payload.prompt, payload.negative_prompt = GeneratorClient.txt2prompt(text)
+
+    payload.prompt = parse_cmd_split(text)[0]
+    payload.negative_prompt = get_cmd_from_message(text, "/n")
 
     with open(img, "rb") as file:
         b64img = base64.b64encode(file.read()).decode("utf-8")
@@ -214,14 +214,15 @@ async def generate_img2img(event, message, text: str = None):
     payload_info = (
         f"`/p {payload.prompt}`\n"
         if not payload.negative_prompt
-        else f"`/p {payload.prompt}` `/n {payload.negative_prompt}`\n"
+        else f"`/p {payload.prompt} /n {payload.negative_prompt}`\n"
     )
     payload_info = f"**img2img:** \n" + payload_info
 
+    tmp_info = ""
     for k in generator_client.img2img_info():
-        payload_info += (
-            f"`/img2img {k} {str(getattr(generator_client.img2img_payload, k))}` \n"
-        )
+        tmp_info += f"{k} {str(getattr(generator_client.img2img_payload, k))}, "
+
+    payload_info += f"img2img\n{tmp_info}\n"
 
     async with asyncio.TaskGroup() as tg:
         generate = tg.create_task(generator_client.img2img(payload))
@@ -230,6 +231,7 @@ async def generate_img2img(event, message, text: str = None):
         )
 
     info = json.loads(generate.result().info)
+    payload_info += f"**{info['sd_model_name']}**\n"
     payload_info += f"seeds: `{info['all_seeds']}`\n"
     payload_info += f"prompts: `{info['all_prompts']}`\n"
     if len(info["all_negative_prompts"]) > 0:
@@ -577,36 +579,80 @@ async def menu_txt2img_styles(event, generator_client=None, data_str: str = None
         generator_client = GeneratorClient(event.chat_id).image
     if data_str:
         try:
-            generator_client.styles(data_str)
+            generator_client.styles(payload="img2img_payload", style=data_str)
             await event.answer(data_str, cache_time=2)
             return await menu_txt2img_styles(event, generator_client)
         except Exception as e:
             await event.answer(str(e), cache_time=2)
     text = f"**Menu/txt2img/styles:**\n"
     text += f"└─**Selected styles:**\n"
-    styles = generator_client.styles(current=True)
+    styles = generator_client.styles(payload="txt2img_payload", current=True)
     if styles:
         for i in styles[:-1]:
             text += f"  ├─**{i}**\n"
         text += f"  └─**{styles[-1]}**\n"
-    buttons = TelegramBot.button_inline_list(generator_client.styles())
+    buttons = TelegramBot.button_inline_list(
+        generator_client.styles(payload="txt2img_payload")
+    )
     buttons.append([Button.inline("Back")])
     await event.edit(text=text, buttons=buttons)
+
+
+async def menu_img2img_styles(event, generator_client=None, data_str: str = None):
+    if not generator_client:
+        generator_client = GeneratorClient(event.chat_id).image
+    if data_str:
+        try:
+            generator_client.styles(payload="img2img_payload", style=data_str)
+            await event.answer(data_str, cache_time=2)
+            return await menu_img2img_styles(event, generator_client)
+        except Exception as e:
+            await event.answer(str(e), cache_time=2)
+    text = f"**Menu/img2img/styles:**\n"
+    text += f"└─**Selected styles:**\n"
+    styles = generator_client.styles(payload="img2img_payload", current=True)
+    if styles:
+        for i in styles[:-1]:
+            text += f"  ├─**{i}**\n"
+        text += f"  └─**{styles[-1]}**\n"
+    buttons = TelegramBot.button_inline_list(
+        generator_client.styles(payload="img2img_payload")
+    )
+    buttons.append([Button.inline("Back")])
+    await event.edit(text=text, buttons=buttons)
+
+
+def parse_cmd_perline(txt):
+    strip_markdown = re.compile(r"`|\*\*|\|\|", re.M).sub("", txt)
+    print(f"{strip_markdown=}")
+    split_cmd = r"(?<=^)\/(\w+)\s+([\w\-]+?)(?<=\w)\s+([\w\-]{1,2}|\w.*\S)\s*$"
+    return re.compile(split_cmd, re.M).findall(strip_markdown)
+
+
+def parse_cmd_split(txt):
+    strip_markdown_newline = re.compile(r"`|\*\*|\|\||\n", re.M).sub("", txt)
+    return re.compile(r"(\/\w+)\s+", re.M).split(strip_markdown_newline)
+
+
+def get_cmd_from_message(message, cmd: str):
+    splited = parse_cmd_split(message)
+    for i, c in enumerate(splited):
+        if c == cmd:
+            return splited[i + 1]
 
 
 async def set_txt2img_payload(event: NewMessage.Event):
     generator_client = GeneratorClient(event.chat_id).image
     message: str = event.message.text
-    option = message.split()
-    try:
-        if len(option) < 2:
-            val = None
-        elif "[" in option[2]:
-            val = eval(option[2])
-        setattr(generator_client.txt2img_payload, option[1], val)
-        print(type(generator_client.txt2img_payload.__getattribute__(option[1])))
-    except (AttributeError, TypeError, ValueError) as e:
-        await event.respond(message=str(e))
+    print(message)
+    print(event.pattern_match)
+    for i in parse_cmd_perline(message):
+        print(i)
+        try:
+            setattr(generator_client.txt2img_payload, i[1], i[2])
+            print(type(generator_client.txt2img_payload.__getattribute__(i[1])))
+        except (AttributeError, TypeError, ValueError) as e:
+            await event.respond(message=str(e))
 
 
 async def menu_img2img(event, generator_client=None):
@@ -930,7 +976,9 @@ async def main():
 
     telegram_client.add_event_handler(
         callback=set_txt2img_payload,
-        event=NewMessage(chats=allow_chats, incoming=True, pattern="/txt2img\s(.*)$"),
+        event=NewMessage(
+            chats=allow_chats, incoming=True, pattern="(?m)/txt2img\s(.*)$"
+        ),
     )
 
     telegram_client.add_event_handler(

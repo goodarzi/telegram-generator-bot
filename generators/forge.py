@@ -12,7 +12,12 @@ from .stable_diffusion_webui_forge_client.client import Client as ForgeBaseClien
 from .stable_diffusion_webui_forge_client.client import (
     AuthenticatedClient as WebuiAuthenticatedBaseClient,
 )
-from .stable_diffusion_webui_forge_client.types import Response, HTTPStatus
+from .stable_diffusion_webui_forge_client.types import (
+    Response,
+    HTTPStatus,
+    Unset,
+    UNSET,
+)
 
 
 from .stable_diffusion_webui_forge_client.api.default import (
@@ -707,12 +712,11 @@ class ForgeClient:
         else:
             return [i.model_name for i in avail_modules]
 
-    def styles(self, style=None, current=False):
+    def styles(self, payload, style=None, current=False):
+        payload = getattr(self, payload)
         avail_styles = self.prompt_styles_get()
         selected_styles: list = (
-            []
-            if isinstance(self.txt2img_payload.styles, Unset)
-            else self.txt2img_payload.styles
+            [] if isinstance(payload.styles, Unset) else payload.styles
         )
 
         if current:
@@ -722,7 +726,7 @@ class ForgeClient:
                 selected_styles.remove(style)
             else:
                 selected_styles.append(style)
-            self.txt2img_payload.styles = selected_styles
+            payload.styles = selected_styles
             return "ok"
         else:
             return [i.name for i in avail_styles]
